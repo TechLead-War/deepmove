@@ -4,13 +4,13 @@
 #include <stdio.h>
 
 const char *move_to_uci(Move m) {
-  static char buf[8];
+  static char buf[16];
   int f = FROM(m), t = TO(m);
-  sprintf(buf, "%c%c%c%c", 'a' + FILE(f), '1' + RANK(f), 'a' + FILE(t), '1' + RANK(t));
+  sprintf(buf, "%c%c -> %c%c", 'a' + FILE(f), '1' + RANK(f), 'a' + FILE(t), '1' + RANK(t));
   if (FLAGS(m) == M_PROMO) {
     int pr = PROMO_PC(m);
-    buf[4] = (pr == 0) ? 'n' : (pr == 1) ? 'b' : (pr == 2) ? 'r' : 'q';
-    buf[5] = 0;
+    buf[8] = (pr == 0) ? 'n' : (pr == 1) ? 'b' : (pr == 2) ? 'r' : 'q';
+    buf[9] = 0;
   }
   return buf;
 }
