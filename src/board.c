@@ -1,8 +1,9 @@
 #include "board.h"
 #include "tables.h"
 #include "types.h"
-#include <string.h>
+
 #include <stdlib.h>
+#include <string.h>
 
 typedef struct { int castle; int ep; int cap; } Hist;
 static Hist hist[MAX_DEPTH];
@@ -10,6 +11,28 @@ static int hply;
 
 void board_clear_hist(void) { hply = 0; }
 int board_hist_ply(void) { return hply; }
+
+void board_sync(Board *b) {
+  int c, p, sq;
+  b->occ[W] = b->p[W][P] | b->p[W][N] | b->p[W][BISHOP] | b->p[W][R] | b->p[W][Q] | b->p[W][K];
+  b->occ[B] = b->p[B][P] | b->p[B][N] | b->p[B][BISHOP] | b->p[B][R] | b->p[B][Q] | b->p[B][K];
+  for (sq = 0; sq < 64; sq++) {
+    b->piece_on[sq] = -1;
+  }
+  for (c = 0; c < 2; c++) {
+    for (p = 0; p < 6; p++) {
+      U64 bb = b->p[c][p];
+      while (bb) {
+        sq = POP(bb);
+        bb &= bb - 1;
+        b->piece_on[sq] = c * 6 + p;
+        if (p == K) {
+          b->king_sq[c] = sq;
+        }
+      }
+    }
+  }
+}
 
 static U64 compute_key(const Board *b) {
   return tables_compute_key(b);
@@ -27,7 +50,7 @@ void board_reset(Board *b) {
   b->p[B][N] = 0x4200000000000000ULL;
   b->p[B][BISHOP] = 0x2400000000000000ULL;
   b->p[B][R] = 0x8100000000000000ULL;
-  b->p[B][Q] = 0x80000000000000ULL;
+  b->p[B][Q] = 0x800000000000000ULL;
   b->p[B][K] = 0x1000000000000000ULL;
   b->occ[W] = 0xFFFFULL;
   b->occ[B] = 0xFFFF000000000000ULL;
@@ -36,12 +59,19 @@ void board_reset(Board *b) {
   b->ep = -1;
   b->king_sq[W] = 4;
   b->king_sq[B] = 60;
-  for (int sq = 0; sq < 64; sq++) b->piece_on[sq] = -1;
-  for (int c = 0; c < 2; c++)
+  for (int sq = 0; sq < 64; sq++) {
+    b->piece_on[sq] = -1;
+  }
+  for (int c = 0; c < 2; c++) {
     for (int p = 0; p < 6; p++) {
       U64 bb = b->p[c][p];
-      while (bb) { int s = POP(bb); bb &= bb - 1; b->piece_on[s] = c * 6 + p; }
+      while (bb) {
+        int s = POP(bb);
+        bb &= bb - 1;
+        b->piece_on[s] = c * 6 + p;
+      }
     }
+  }
   tables_ensure_zobrist();
   b->key = compute_key(b);
 }
@@ -51,9 +81,19 @@ void board_from_fen(Board *b, const char *fen) {
   int sq = 56;
   const char *s = fen;
   while (*s && sq >= 0 && sq < 64) {
-    if (*s == ' ') break;
-    if (*s >= '1' && *s <= '8') { sq += (*s - '0'); s++; continue; }
-    if (*s == '/') { sq -= 16; s++; continue; }
+    if (*s == ' ') {
+      break;
+    }
+    if (*s >= '1' && *s <= '8') {
+      sq += (*s - '0');
+      s++;
+      continue;
+    }
+    if (*s == '/') {
+      sq -= 16;
+      s++;
+      continue;
+    }
     int c = (*s >= 'A' && *s <= 'Z') ? W : B;
     int p = -1;
     switch (*s | 32) {
@@ -103,7 +143,9 @@ int make_move(Board *b, Move m) {
   int from = FROM(m), to = TO(m), fl = FLAGS(m);
   int stm = b->side;
   int piece = b->piece_on[from];
-  if (piece < 0) return 0;
+  if (piece < 0) {
+    return 0;
+  }
   int pc = piece % 6;
   hist[hply].castle = b->castle;
   hist[hply].ep = b->ep;
@@ -148,7 +190,9 @@ int make_move(Board *b, Move m) {
   }
   b->occ[stm] |= to_bb;
   b->ep = -1;
-  if (pc == P && (RANK(to) - RANK(from)) * (stm ? -1 : 1) == 2) b->ep = stm == W ? from + 8 : from - 8;
+  if (pc == P && (RANK(to) - RANK(from)) * (stm ? -1 : 1) == 2) {
+    b->ep = stm == W ? from + 8 : from - 8;
+  }
   if (from == 4) b->castle &= ~3;
   if (from == 60) b->castle &= ~12;
   if (from == 0) b->castle &= ~2;
@@ -168,7 +212,9 @@ void unmake_move(Board *b, Move m) {
   int from = FROM(m), to = TO(m), fl = FLAGS(m);
   int stm = b->side;
   int piece = b->piece_on[to];
-  if (piece < 0) return;
+  if (piece < 0) {
+    return;
+  }
   int pc = piece % 6;
   if (fl == M_PROMO) {
     int pr = PROMO_PC(m);

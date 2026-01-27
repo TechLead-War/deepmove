@@ -4,13 +4,15 @@
 #include "search.h"
 #include "uci.h"
 #include "types.h"
+
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
-#include <ctype.h>
 
 static int str_eq_ignore_case(const char *a, const char *b) {
-  for (; *a && *b; a++, b++)
+  for (; *a && *b; a++, b++) {
     if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
+  }
   return *a == *b;
 }
 
@@ -37,11 +39,13 @@ static int is_fen(const char *s) {
 
 static void trim_newline(char *s) {
   size_t n = strlen(s);
-  if (n > 0 && s[n - 1] == '\n') s[n - 1] = '\0';
+  while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) { n--; s[n] = '\0'; }
 }
 
 int main(int argc, char **argv) {
   Board b;
+  setvbuf(stdout, NULL, _IOLBF, 0);
+  setvbuf(stderr, NULL, _IOLBF, 0);
   engine_init();
 
   if (argc > 1 && is_interactive_arg(argv[1])) {
@@ -49,40 +53,59 @@ int main(int argc, char **argv) {
     board_reset(&b);
     for (;;) {
       if (b.side == us) {
+        board_sync(&b);
         MoveList ml;
         gen_moves(&b, &ml);
         if (ml.n == 0) break;
+        fprintf(stderr, "Thinking... ");
+        fflush(stderr);
         int score;
-        Move best = search(&b, 5, &score);
-        if (!best) break;
+        Board b_search = b;
+        Move best = search(&b_search, 12, &score);
+        if (!best || !move_is_legal(&b, best)) {
+          printf("(none)\n");
+          fflush(stdout);
+          break;
+        }
         printf("%s\n", move_to_uci(best));
         fflush(stdout);
-        make_move(&b, best);
+        if (!make_move(&b, best)) break;
+        board_sync(&b);
       } else {
+        board_sync(&b);
         char buf[32];
         if (!fgets(buf, sizeof buf, stdin)) break;
         trim_newline(buf);
         if (!buf[0] || str_eq_ignore_case(buf, "quit")) break;
         Move m;
         if (!uci_to_move(&b, buf, &m)) {
-          fprintf(stderr, "invalid move\n");
+          fprintf(stderr, "invalid move: %s\n", uci_last_error());
           continue;
         }
-        make_move(&b, m);
+        if (!make_move(&b, m)) {
+          board_sync(&b);
+          if (!make_move(&b, m)) {
+            fprintf(stderr, "invalid move: could not apply move\n");
+            continue;
+          }
+        }
       }
     }
     return 0;
   }
 
-  if (argc > 1 && is_fen(argv[1]))
+  if (argc > 1 && is_fen(argv[1])) {
     board_from_fen(&b, argv[1]);
-  else
+  } else {
     board_reset(&b);
+  }
   int score;
-  Move best = search(&b, 5, &score);
-  if (best)
+  Move best = search(&b, 12, &score);
+  if (best) {
     printf("%s\n", move_to_uci(best));
-  else
+  } else {
     printf("(none)\n");
+  }
+  fflush(stdout);
   return 0;
 }

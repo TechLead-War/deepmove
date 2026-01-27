@@ -61,6 +61,7 @@ extern HashEntry tt[HASH_SIZE];
 void init_tables(void);
 void board_from_fen(Board *b, const char *fen);
 void board_reset(Board *b);
+void board_sync(Board *b);
 int is_attacked(const Board *b, int sq, int side);
 void gen_moves(const Board *b, MoveList *ml);
 void gen_captures(const Board *b, MoveList *ml);

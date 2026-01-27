@@ -40,16 +40,22 @@ static void add_move(MoveList *ml, Move m) {
 }
 
 int is_attacked(const Board *b, int sq, int side) {
-  U64 occ = b->occ[0] | b->occ[1];
+  U64 occ = 0;
+  int c, p, i;
   int opp = side ^ 1;
+  for (c = 0; c < 2; c++) {
+    for (p = 0; p < 6; p++) {
+      occ |= b->p[c][p];
+    }
+  }
   if (inv_pawn_att[opp][sq] & b->p[opp][P]) return 1;
   if (knight_att[sq] & b->p[opp][N]) return 1;
   if (king_att[sq] & b->p[opp][K]) return 1;
-  for (int i = 0; i < 4; i++) {
+  for (i = 0; i < 4; i++) {
     int d = rook_dirs[i];
     if (slide_att(sq, d, occ) & (b->p[opp][R] | b->p[opp][Q])) return 1;
   }
-  for (int i = 0; i < 4; i++) {
+  for (i = 0; i < 4; i++) {
     int d = bishop_dirs[i];
     if (slide_att(sq, d, occ) & (b->p[opp][BISHOP] | b->p[opp][Q])) return 1;
   }
@@ -101,7 +107,7 @@ void gen_moves(const Board *b, MoveList *ml) {
       from = POP(p);
       p &= p - 1;
       for (int i = 0; i < ndir; i++) {
-        int d = (pc == Q) ? dirs[i] : dirs[i];
+        int d = dirs[i];
         to_bb = slide_att(from, d, occ_all) & ~b->occ[stm];
         while (to_bb) { to = POP(to_bb); to_bb &= to_bb - 1; add_move(ml, MOVE(from, to, M_NORMAL)); }
       }
@@ -136,8 +142,23 @@ int move_is_legal(Board *b, Move m) {
   int from = FROM(m), to = TO(m), fl = FLAGS(m);
   int stm = b->side;
   int ksq = b->king_sq[stm];
+  if (ksq < 0 || ksq > 63 || b->piece_on[ksq] != stm * 6 + K) {
+    U64 kbb = b->p[stm][K];
+    ksq = kbb ? POP(kbb) : -1;
+    if (ksq < 0) return 0;
+  }
   int piece = b->piece_on[from];
-  if (piece < 0) return 0;
+  if (piece < 0 || (piece / 6) != stm) {
+    int pc;
+    piece = -1;
+    for (pc = 0; pc < 6; pc++) {
+      if ((b->p[stm][pc] >> from) & 1) {
+        piece = stm * 6 + pc;
+        break;
+      }
+    }
+    if (piece < 0) return 0;
+  }
   int pc = piece % 6;
   if (pc == K) {
     Board tmp = *b;
@@ -176,8 +197,17 @@ int move_is_legal(Board *b, Move m) {
     b->p[stm][pr] |= to_bb;
   }
   int legal = !is_attacked(b, ksq, stm);
-  b->p[stm][pc] ^= to_bb; b->p[stm][pc] |= from_bb;
-  b->occ[stm] ^= to_bb; b->occ[stm] |= from_bb;
+  if (fl != M_PROMO) {
+    b->p[stm][pc] ^= to_bb;
+    b->p[stm][pc] |= from_bb;
+  } else {
+    int pr = PROMO_PC(m);
+    if (pr == 0) pr = N; else if (pr == 1) pr = BISHOP; else if (pr == 2) pr = R; else pr = Q;
+    b->p[stm][pr] ^= to_bb;
+    b->p[stm][P] |= from_bb;
+  }
+  b->occ[stm] ^= to_bb;
+  b->occ[stm] |= from_bb;
   b->piece_on[from] = piece;
   b->piece_on[to] = cap;
   if (cap >= 0) {
@@ -190,12 +220,6 @@ int move_is_legal(Board *b, Move m) {
     b->p[stm^1][P] |= (1ULL << epsq);
     b->occ[stm^1] |= (1ULL << epsq);
     b->piece_on[epsq] = (stm^1) * 6 + P;
-  }
-  if (fl == M_PROMO) {
-    int pr = PROMO_PC(m) + 1;
-    if (pr == 1) pr = N; else if (pr == 2) pr = BISHOP; else if (pr == 3) pr = R; else pr = Q;
-    b->p[stm][P] |= to_bb;
-    b->p[stm][pr] ^= to_bb;
   }
   return legal;
 }

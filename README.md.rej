@@ -1,0 +1,10 @@
+diff a/README.md b/README.md	(rejected hunks)
+@@ -10,7 +10,7 @@ Output: best move in UCI (e.g. `e2e4`).
+ `./engine white` or `./engine black` (or `w` / `b`).  
+ - If you're **white**: the engine prints your first move; you type the opponent's reply (e.g. `e7e5`), enter; engine prints your next move; repeat.  
+ - If you're **black**: you type the opponent's first move (e.g. `e2e4`), enter; engine prints your reply; repeat.  
+-Moves are in UCI format: `e2e4`, `g1f3`, `e7e8q` (promotion). Type `quit` or press Ctrl-D to exit.
++Moves: UCI format only. Four characters = from-square + to-square (e.g. `e2e4`, `d8c7`). Promotion: add piece letter (e.g. `e7e8q`). You can use spaces or uppercase (`d8 c7`, `D8C7`) — both are accepted. Type `quit` or press Ctrl-D to exit.
+ 
+ **FEN** is a single line that encodes a board (where the pieces are, who is to move, castling rights, en passant). Use it when you want the engine to think from a specific position instead of the start. Paste the line in quotes after the program name.
+ 

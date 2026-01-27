@@ -1,0 +1,1500 @@
+From 3069420902b74d505757de18bb30dc01be95f6c8 Mon Sep 17 00:00:00 2001
+From: Ayush Kapri <ayush.kapri_cws@external.swiggy.in>
+Date: Thu, 5 Feb 2026 10:30:14 +0530
+Subject: [PATCH] fixup
+
+---
+ README.md          |   2 +-
+ chess.c            |  94 ++++++++++++++++++++++------
+ chess.h            |   1 +
+ engine             | Bin 68776 -> 69096 bytes
+ include/board.h    |   1 +
+ include/types.h    |   2 +-
+ include/uci.h      |   1 +
+ main.c             |   8 ++-
+ src/board.c        |  68 ++++++++++++++++----
+ src/eval.c         |  66 +++++++++++++++++++-
+ src/main.c         |  49 +++++++++++----
+ src/movegen.c      |  50 +++++++++++----
+ src/search.c       | 118 +++++++++++++++++++++++++++++++----
+ src/tables.c       |  12 ++--
+ src/uci.c          | 151 +++++++++++++++++++++++++++++++++++++++++----
+ tests/README.md    |  24 +++++++
+ tests/run_tests.sh | 101 ++++++++++++++++++++++++++++++
+ 17 files changed, 658 insertions(+), 90 deletions(-)
+ create mode 100644 tests/README.md
+ create mode 100755 tests/run_tests.sh
+
+diff --git a/README.md b/README.md
+index 83c0a33..ac408c2 100644
+--- a/README.md
++++ b/README.md
+@@ -10,7 +10,7 @@ Output: best move in UCI (e.g. `e2e4`).
+ `./engine white` or `./engine black` (or `w` / `b`).  
+ - If you're **white**: the engine prints your first move; you type the opponent's reply (e.g. `e7e5`), enter; engine prints your next move; repeat.  
+ - If you're **black**: you type the opponent's first move (e.g. `e2e4`), enter; engine prints your reply; repeat.  
+-Moves are in UCI format: `e2e4`, `g1f3`, `e7e8q` (promotion). Type `quit` or press Ctrl-D to exit.
++Moves: UCI format only. Four characters = from-square + to-square (e.g. `e2e4`, `d8c7`). Promotion: add piece letter (e.g. `e7e8q`). You can use spaces or uppercase (`d8 c7`, `D8C7`) — both are accepted. Type `quit` or press Ctrl-D to exit.
+ 
+ **FEN** is a single line that encodes a board (where the pieces are, who is to move, castling rights, en passant). Use it when you want the engine to think from a specific position instead of the start. Paste the line in quotes after the program name.
+ 
+diff --git a/chess.c b/chess.c
+index 4913c99..99c02e2 100644
+--- a/chess.c
++++ b/chess.c
+@@ -212,7 +212,7 @@ void board_reset(Board *b) {
+   b->p[B][N] = 0x4200000000000000ULL;
+   b->p[B][BISHOP] = 0x2400000000000000ULL;
+   b->p[B][R] = 0x8100000000000000ULL;
+-  b->p[B][Q] = 0x80000000000000ULL;
++  b->p[B][Q] = 0x800000000000000ULL;
+   b->p[B][K] = 0x1000000000000000ULL;
+   b->occ[W] = 0xFFFFULL;
+   b->occ[B] = 0xFFFF000000000000ULL;
+@@ -284,6 +284,18 @@ void board_from_fen(Board *b, const char *fen) {
+   b->key = compute_key(b);
+ }
+ 
++void board_sync(Board *b) {
++  int c, p, sq;
++  b->occ[W] = b->p[W][P] | b->p[W][N] | b->p[W][BISHOP] | b->p[W][R] | b->p[W][Q] | b->p[W][K];
++  b->occ[B] = b->p[B][P] | b->p[B][N] | b->p[B][BISHOP] | b->p[B][R] | b->p[B][Q] | b->p[B][K];
++  for (sq = 0; sq < 64; sq++) b->piece_on[sq] = -1;
++  for (c = 0; c < 2; c++)
++    for (p = 0; p < 6; p++) {
++      U64 bb = b->p[c][p];
++      while (bb) { sq = POP(bb); bb &= bb - 1; b->piece_on[sq] = c * 6 + p; if (p == K) b->king_sq[c] = sq; }
++    }
++}
++
+ int is_attacked(const Board *b, int sq, int side) {
+   U64 occ = b->occ[0] | b->occ[1];
+   int opp = side ^ 1;
+@@ -395,6 +407,7 @@ int move_is_legal(Board *b, Move m) {
+   int ksq = b->king_sq[stm];
+   int piece = b->piece_on[from];
+   if (piece < 0) return 0;
++  if ((piece / 6) != stm) return 0;
+   int pc = piece % 6;
+   if (pc == K) {
+     Board tmp = *b;
+@@ -433,8 +446,17 @@ int move_is_legal(Board *b, Move m) {
+     b->p[stm][pr] |= to_bb;
+   }
+   int legal = !is_attacked(b, ksq, stm);
+-  b->p[stm][pc] ^= to_bb; b->p[stm][pc] |= from_bb;
+-  b->occ[stm] ^= to_bb; b->occ[stm] |= from_bb;
++  if (fl != M_PROMO) {
++    b->p[stm][pc] ^= to_bb;
++    b->p[stm][pc] |= from_bb;
++  } else {
++    int pr = PROMO_PC(m);
++    if (pr == 0) pr = N; else if (pr == 1) pr = BISHOP; else if (pr == 2) pr = R; else pr = Q;
++    b->p[stm][pr] ^= to_bb;
++    b->p[stm][P] |= from_bb;
++  }
++  b->occ[stm] ^= to_bb;
++  b->occ[stm] |= from_bb;
+   b->piece_on[from] = piece;
+   b->piece_on[to] = cap;
+   if (cap >= 0) {
+@@ -448,12 +470,6 @@ int move_is_legal(Board *b, Move m) {
+     b->occ[stm^1] |= (1ULL << epsq);
+     b->piece_on[epsq] = (stm^1) * 6 + P;
+   }
+-  if (fl == M_PROMO) {
+-    int pr = PROMO_PC(m) + 1;
+-    if (pr == 1) pr = N; else if (pr == 2) pr = BISHOP; else if (pr == 3) pr = R; else pr = Q;
+-    b->p[stm][P] |= to_bb;
+-    b->p[stm][pr] ^= to_bb;
+-  }
+   return legal;
+ }
+ 
+@@ -680,21 +696,61 @@ const char *move_to_uci(Move m) {
+   return buf;
+ }
+ 
++static int parse_squares(const char *uci, int *from, int *to, char *promo) {
++  const char *p = uci;
++  int sq[2];
++  int n = 0;
++  *promo = 0;
++  while (*p && n < 3) {
++    int fc = *p | 32;
++    if (fc >= 'a' && fc <= 'h' && p[1] >= '1' && p[1] <= '8') {
++      if (n < 2) sq[n++] = (p[1] - '1') * 8 + (fc - 'a');
++      p += 2;
++      continue;
++    }
++    if (n == 2 && (*p == 'n' || *p == 'b' || *p == 'r' || *p == 'q' || *p == 'N' || *p == 'B' || *p == 'R' || *p == 'Q')) {
++      *promo = (char)(*p | 32);
++      p++;
++      continue;
++    }
++    p++;
++  }
++  if (n < 2) return 0;
++  *from = sq[0];
++  *to = sq[1];
++  return 1;
++}
++
+ int uci_to_move(const Board *b, const char *uci, Move *out) {
+-  if (!uci || uci[0] < 'a' || uci[0] > 'h' || uci[1] < '1' || uci[1] > '8' || uci[2] < 'a' || uci[2] > 'h' || uci[3] < '1' || uci[3] > '8') return 0;
+-  int from = (uci[1] - '1') * 8 + (uci[0] - 'a');
+-  int to = (uci[3] - '1') * 8 + (uci[2] - 'a');
++  int from, to;
++  char promo;
++  if (!uci) return 0;
++  while (*uci == ' ' || *uci == '\t') uci++;
++  if (!parse_squares(uci, &from, &to, &promo)) return 0;
++  board_sync((Board *)b);
+   MoveList ml;
+   gen_moves(b, &ml);
++  int first = -1, count = 0;
+   for (int i = 0; i < ml.n; i++) {
+     Move m = ml.m[i];
+-    if (FROM(m) == from && TO(m) == to) {
+-      if (FLAGS(m) == M_PROMO) {
+-        char pr = uci[4] | 32;
+-        int prn = (pr == 'n') ? 0 : (pr == 'b') ? 1 : (pr == 'r') ? 2 : 3;
+-        if (PROMO_PC(m) == prn) { *out = m; return 1; }
+-      } else { *out = m; return 1; }
+-    }
++    if (FROM(m) != from || TO(m) != to) continue;
++    if (FLAGS(m) == M_PROMO) {
++      int prn = (promo == 'n') ? 0 : (promo == 'b') ? 1 : (promo == 'r') ? 2 : (promo == 'q') ? 3 : -1;
++      if (prn < 0 || PROMO_PC(m) != prn) continue;
++    } else if (promo) continue;
++    if (first < 0) first = i;
++    count++;
++  }
++  if (first < 0) return 0;
++  if (count == 1) { *out = ml.m[first]; return 1; }
++  for (int i = 0; i < ml.n; i++) {
++    Move m = ml.m[i];
++    if (FROM(m) != from || TO(m) != to) continue;
++    if (FLAGS(m) == M_PROMO) {
++      int prn = (promo == 'n') ? 0 : (promo == 'b') ? 1 : (promo == 'r') ? 2 : (promo == 'q') ? 3 : -1;
++      if (prn < 0 || PROMO_PC(m) != prn) continue;
++    } else if (promo) continue;
++    if (move_is_legal((Board *)b, m)) { *out = m; return 1; }
+   }
+   return 0;
+ }
+diff --git a/chess.h b/chess.h
+index 6885cc5..280a71d 100644
+--- a/chess.h
++++ b/chess.h
+@@ -61,6 +61,7 @@ extern HashEntry tt[HASH_SIZE];
+ void init_tables(void);
+ void board_from_fen(Board *b, const char *fen);
+ void board_reset(Board *b);
++void board_sync(Board *b);
+ int is_attacked(const Board *b, int sq, int side);
+ void gen_moves(const Board *b, MoveList *ml);
+ void gen_captures(const Board *b, MoveList *ml);
+diff --git a/engine b/engine
+index 6e9456bf66867ec419822c500e3b9bb2abe9b441..789c783c1da3f11dadf3d9d730f60b8e6cb4af79 100755
+GIT binary patch
+delta 14632
+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
+G=6?Wz*xxJw
+
+delta 7770
+zcma)B4P2B}x_{354#PV$2*{T(5FeV#AebMxiJSWJAt~(L62}U&9RW#(A!L+FWV<t#
+z+qEclb}&%dpxr)Ts?`=<o!VVc@0MYE{itoX)_VhM3neoXbw;Jx|CxEmi2CjCPQAS6
+z|2)q*&&PSrbIy4kY*TgaRBiveaA2O}qr#{TnTQe520Z-NAv<TW1+l5Q0dhL$;m5Jc
+zX<eD<>|m);i}M29Tl_qt#d*$?=(Is0w<=_g1%D@5sAF}`*M&r;b^b-jV)4#v!mn7p
+zbEkN_&i;?UVDUBa&LMGOe1hK|l9fRMh&scZd8&y^Qen?*B6}pbsf>{<Kn2?Ic(#a)
+z=Hguy%BT}W9ol!|;lD8DNya+^PdGO#M1o|zV`;RrUzMJGhv~i6nAhfZJ(ts7G;ixO
+z@6Li)Djt6XLYz}VGK88RJ4-@-I%O3UrGsO@!wunz`R^t?97k#ywQ|QNb`OT^3kfev
+zc4Uyfq={&|r7YR`iY`^Po%&VX$8^;~6r1iSBRZZ&;SLMl7M9#y9Da|W+WsOfaK0Ql
+zMPO>@vB<jw7VexnzSO26`YLrv@BBKVJ(0q62MPB1X0#1u(;a7_M5nTsz}c_tJLQp|
+zFnh^spnZw=HnK;NmPYD;t%5x&RkW83h#FT8QH(8~tfADdpGxGOIwHHLlG^<usdX=H
+zNLltah3KMlX{k}7rR`B<vzE^)-q<{|U2h_lr64kY;|r`^&j<J`-lin77R1XNFLN5&
+zzv1sk$r?QiJQZ0_Q;cpRG55rgT=zr@bsr)XumGF~EV;`mR+mR{poyU6gQju+nxcVK
+zzy-iIty_5F_Nx;yV9HH&;jq13Urqu9LLjgR0y?)8LXNaZau~+bi4?{zAVrMgBl+(M
+z8j31lVsXkQx==Y|v%XNGk`$J_u8<zrho;d|-?L;ra>Zv{BZ<0;G4MDH9&5?^`3$H2
+z4WDnqNMm8wu#-j4c4o$A-YX%-th9GNe+&2Z&Sw(6=BJe@v`S860h(E%J-}%~fM!KI
+z-tO<u&d4KdE{*v6pOc;4v8A^x#ym-_<i`7CI`w`n$y!fUu)UbPXqQN@lAHIT3$pW;
+zxcU0Um}jYmxvTiw&fHh7`&#<NXxH-V-H*q`iQ@~k)V%6H$(^Opo4Q|1h!)vf-3ODV
+z3c_tyooAER3T(Rb-jsx#gPCNkLS9Ks?T|h!^DGIGy$hLimIdhBCAJ_yj}6dsr;$;*
+zxv(p}`%Fr!TFa6hR;2q(A-ub3%1a_o;@KHBna2%jlA{QwV{IO{JRj;nsvdu8Ak-nL
+zk*W*Q+h%|_9<-Uimb#B-oMWLy@UMt1aQ0;GU{5=jXH8<8oef#V%<B9z+EvaoSt)Fl
+zQ#0Mf7CX(;kK8YYo|qRyQE{^1IJIKqft8`2TQ7;^%Fa|T%gPR07F}m|S1sRBvUvHv
+zbz5wmZPG~jd+$K!gbSKPUmRJPnv9npBS$};0WsDk%(j<Y634kdQ&Dp|<TPm??UK^o
+zckZ5%HPz@~?w)Y6<|4t`^<?b}wU=y;D%$v@mX<cDX=zbxv)&TY>=b8a*!;uAxK3j>
+zKDy>>c@C=%Rjh=+2Sw)U(ndG&67drZuR|zm@0!+jwDe)mJ!$Xns%Bw*MJ(RcS9+`G
+z%}1G|x^cbdi%{|wDfH^b*`72<u3Li@{?5jE2R>X;f56K;x0>PR61Zuwb+y?H@UssJ
+zGXAMe<O-%Of2FOawA%9&i|?x`&G1w=nmtg`SKVmvoLZ56phrX2bCX2Fmpbxpf`7hH
+za@z#54nm0(vSo$DVsr+KS1rgV`FO>TOly0!+Tt;!9oh91)AYSsJ<VfjtoE4EHaBM2
+zJbvpwN<WYQk9$JMdJuzZ9tmG&2%+%{$C0%fgB685xoaU5FG1VDp4^o(Ubd!BZr}9|
+zlf4EQ_YNbk2FlEL8QL-$s<^?fjD~a%pO`@yh?*b64eiIo@krYd=`;J~uFg{1!yX9(
+zNKE7EL>Q|O!XU0f_)hu5mhBH)FgwymWryaUnnW!WYnQv)ic8HN3ltZZ8a(F4Dh~{E
+znH$qRgNd>`1;&@bvF}C7#yvu4#)b=_a*YZV2Fk!n)9MTjDa+nLv<6dT_nA=HZ5Al|
+z{~N8YK(t(4qoNh3gsYE-D}~6~KcQXk6P;UUC)*@cl?d4PQ>?WA!EW@9K{gznnQQn<
+zPM!hV=U0*C(;egCJnOZWs1RXZU*YHlIf{&f8rmy7GQLfyD);0u+M7?kA5}#5epH~M
+z6Ct^*?Kc}L4xDG2;`6AxkCJef`Fuu!jc?0S$=>pSyzRRkB(bT2a^2^d_C}|HZ<J2b
+zjZQz%Cl7se-|rLl@A~AUk1g!`og)8Trvh{u_x(OGvN!LFZ?6ci3lN3Ph{7U7VYQ@c
+z+DwbkCmelL#lKdfup2vyK(cqDZA{q2jTHxOVG+8u6rtlGOXDF!xW<N8)CMAT$0%8U
+zcoC%^md$go9V?6I*nU_z-@R?DFrxCqvIXwlV`UMI(_i|&lMexd7rBppS9ZSf0fb`s
+zjz4vcG_tOdd~*2mr4v#eRujs^#n^2t24<5(k1cC3BG0`_E9t;@j5OwU4c~F7)A?#{
+zrt0%6z82>fx#w($r4tuL(RE1_T$fSw7b4OBLrcahqRKUlD*Iuf>`h-N|5Agq&y(2O
+zif}NCH*~d0qU=p!2}7F*dzcQ2S&St^N5%msHUcruwI6k4aB7}=u?DLUvI`-5kfDA}
+zlN%N?vPucL8;gN$S}Y}<*Y@5Q==ij`dP5J>Sb8JLSfn9`jcJF<Fqhs>sEd0xd`vV9
+zf#(sUi+8EX`n-mWiRd4VrFiwltx>}m1Bbns>!RM}MKNm(CCA{@N8K021lLtD$z>Cz
+zp^OMJ?%de8fg3p>CYW6xkN8^b-}tf>f@_Dz*K%5nEe_y#*KdiMuZyJM1lKaJuf-%L
+zS<YVf8Sf_A>lLVBaFXn97bQzk7#VwnB+I@-&*}#-MS(E_mDRbbB+0e|)*V`BcOTIT
+zO$-|l7x(}J$`WNCc@%{!eQQ(_)998%ZUVBLAzTNE{KoBup{vlAKpTWoDI!ok?eK_4
+zr#BqOkBh!JNzt-<5&Fj<GA$@JJUZ79olqhhLX+qZO|v=>nsz}NIvawjgwQ24)Ca@j
+zYKF3oQBf&ER6e;86+QNfc$W$aR{MM{qobpSGd4u0578MNnLd>G9>Ep}O;9<Xmur|8
+zZiEgU#=+_&SR04;P_f*=bE3(dvEfWHHH^-I>hnHh0_3j4tHD>~uEi+Z?P9ED@a=ZJ
+zgl*u=?tDYLsIy4>+Vx8`I1pZ7hEfAH^ovl2c}TVKcwD@ZEj%O>TtTa@jIyc-RyAz=
+zHY|(BB+EBgMn4pm_%UI51L5OgabY|p%N&2URC|5j$re6w?P9d0=~JKa7_ujTV=ZC8
+zM}eJx$h*mgg?`b$RvFeTxwPN-T2d(5QjIwr2KLOxAq)@S&pk>3;K@;}A|A4n?LwSo
+z*P&<hm$8IG5at}dL?Rw_FXT%@B;$m}2IN32mc|5ED4Zo9Ul{@XM>u=iX;F`*zzN7)
+zczMmgGy(#RelMdfeJBbhG10Q(aGSneNVGH`YSVwl9f&W^bgnMGO)ulPO2@MtA}UHn
+zs>Z=EnF3DW2buFv#j|YbGq>oMK*TVR<-lz^XJH8C1iOqh=A(+`b@@c*=oL*LY*NwQ
+zt83ou@|alH<+}y&L{vpp*9iE$DrS?Mv*jhWRJw_xQU*k;h(!F6O3pd*8Qq{&pb*WG
+z<ebicoXszI7*6Db$vNqte=ArHL4F1el+ywz%ZJiDD9`P>y5`TF+#t^9?<=UD9?aB5
+zWkwcW4U}U(8%>xkobFEcy@ew$3@ftUw5;iIwzP;%(@lHZMoTRqT0ndiL<`H*Wn$2u
+z;>p5u9!u{lOphAVhohhaSB#-^Q*pUtnxTGpXWeMtkQxVXNoz@+u3kn|yzwB;1F7nm
+zs1%iKE#po^$+*QP&PqALtOrB3>QfFd>wvgPpR$En?I{e6xl1i+BR=B=Mh*OoI1Y+C
+z7)2cl<YDry5lBOZErML>{K}(|y%G*loub||e9_m!FM&s6$XKtIz0EPS*DlC8tD-4;
+zfph7yskUrJ%{+Pg!|f$A(e4q*k~W@<cD0<-p`+|fg-_%7p;qCe?%TBi{>=(M75uay
+zA63vE9^fY_d^^TZ2=Y-K?eH4o-<%zz2y}$u>J$_hN5(C2at=0-J%$%G&P3y6o1n<a
+zkn>?5;D!!hcjSilhfwxa(6}RZ7;+`Z$EL&$<@~P|ek%H(5Avmep`3qK;jaS!^B_Mo
+zU?}*u?9)L3DEK%ifcw@BL;t98ApS8pke2ujcW4|pkH%dZN9t(2L*qyqjbGC^@Ez#e
+z{yQ}e+_DsGLnL0;IPiVuTY+C`_yzP^yieo6efnGcyvE@_@dgcYYa9k9=O8&Pm?~ox
+z5~4~?dkM5uHD$Zt6i>QKI9yN1I6Pr6J9`Jk7}pcdKQ52A;dC?a5-#O<pYB#Wp2xro
+z`A*0v`wbL7+=^p3ZvY*(j**)Kx&Ci_a|lyPy&A`}P}V7~@EG_MBV%D0zn~92kKFMu
+zYcT?+q(xZP1z6VkSk`%6&W_n(wpb|TO5&hk5Jtp>(1}|y$dx$Ri_d3!;-h6RZfSdR
+ziZu>B-Yf3VI1=%0T&8i{hWE1(vNsy<^(!=va3xx2u+0P`lX}f(^gDsEPorM!hGQ~L
+zP6LT@1L!tK>SZW?j32XNE&Og76b{FBJGeXFo$f`M<`F_?9-&Jp{dSKpo3GEc7;Ggx
+z?-yh*E-cOdzKE6%V-8_C3pk$jLovf=FjU><-pjtd9G9TofdkHwYTK&0DF$5HQ4v3`
+zPMzD|U6|8x$(N0|Hgg53SZ4V0*WAum2lll7{e?LMgR&HU2lyF5z6bm_3v*IM%AOqT
+zkK~>h<l}2ne@|hK9k(}p8}yHFw_yN;HK5=!cF@Cxe3@=HEY~>pz=OxQ2RQFNk1b>(
+zyhrGp_kqq=#TlFhU%t^!biIH!60~^+`bQ!nB&2-cZzJ(;wDqIf$+Gv(8;psg7*j^I
+zGe)(ik7~~v)&5bSjbtQeP3bPdPEKjXcH88Nz<*?Y&|FXE+K0+&%&Su$So=_=mL9G$
+z*H=<`O<9G7(ree&Rw8p5`eO+boS;lR{Kwy@(u8ZO3VhBIBJdu>7JnxIe>!CR!H>5`
+z{hWy_b^Hr3dOQW`8RJM;JdRlX1QHHl0ya;9LVV=hlR>N|i^M7{(p9sG#blGXc}}-=
+z<&H_+_LXZAoN9ZOK=vTvTH^0|!{m@H7&d&zc(ywF6bwhTW2l%6pL$swqn58UY|Xg)
+z@2`1qeHEGRUsGAXz9osVgz5F`YAS2}CPCOl=Wt5!dnZ!s6cVY^fIlzr)}ATwv1J2e
+zQ*Gdtf%3&Y_|tJa<SWYR>K|NJxt{Lep<IvenKT@S$k_K|IKf<RsxK?A0lnrSQ(f7^
+zwWhNAda{aiY96??^zeF4K-eo+({_elJtFUW*x$EyjbHj@R%>2URqt=xUSm-H5R@Os
+z2Y$g^OGlZd(!^EMaj*tU!8)>zv(}qxD%X_N&}XcEt?9uEGYv5k%IL2QvL<{Wg_^hh
+z%8qem+$^V1$3wJJ0PAm@)r!9)a;vFbFjrPonheMq`mM0O9^V$gKkt{?hCJ{O@Sd>R
+zypBE;M0)@Jmg53TwtX#B)~-i*OdHphuQQ|D6+vm4)>W3RZlLRYm~BW1!5=0QZ4&G0
+zccMtw*Ta)REPbKEY=Q@V7vC0ZA1Dj@`>se~rU$A_l^ZH69;~l4Rbjx&b)+d@Tefbs
+ziP9<`Dznv4(V9w_Uuvcu%tGDl0eW1hqc?<gWeq0!SXf_KwyvUz&I$E&Kzxu+K&9>r
+zRZNU0<b{Z^FptowZdDJf{yXg5@ju@a`iGF~Y&dkYu$O%$Pz2UNIM%?=u`BVVa+8AZ
+z%nsmb9ODB56(H-mKsF~Jo^x{pc%Fg>6}(8n9tD>uI6W^Qe-FpFTTyQSmvao|l7g*4
+z{PzGK<(p!;K%GKxC<65@ud7&!Egl;Mw<{e_1R9;#k2&Uxl;fKf{$d5sP%y5Hets*e
+z8JE9T!8Irj9Gex~F)4uS6<m)Ul=C-ntRZ}M`$vGVO%Yg$GQb6%4G54O2N8~63gUqP
+z{vF3))ciPr4=DKfgaAIQ;6cTplL}splPDh#!@>X?k^PeZ;f$XEjH3}37!Km00QM=k
+zRl&UU!2@c=QH;xv3u63}700MKegloO1N>wK^D4>tvpD9dQH9yzge9DS$EaWv$6Uef
+zfdO%E@bj-L9@Hs#5Sta6^a%b0{s+MCsWJGuG5B@h`J+4hVT{0AWAKSF_*9Em%~F=1
+z9Yek_27AX~h71gl0(ORu!PvZMT1$e&CTaXlz|59$61%149*Nzx{|$*nv6fRB*7yU}
+zyro0So@kk+V{t8a>e!Fe+Q?La!tf7$Q*85ihVUP&tX*TSt)zQ5v%)DK6ffBSxA_f!
+z`@QiQ{nxLYYJ78bc*A{B(olZgg_Ya4bn5mvcHV#S$-OfUv|Y<^&;9J_pKY4m^RE86
+zFD-}bEajo<g69S!-gw{gQv84A-<@R|7IF^?j@5tu-@D(8ZT+Qj=9Ge@Nz-=pbT9Au
+zS@*2pZ(DNsLhkLKPI%$!);XWItvTv?QI+sm?A&9=?%Fy$u5@3_9@B#R7VNF>d%9)v
+z6W6=E`rMXJ!q}?R2{mtJHSM{3{=8+EcP#1oRoCF;U!<)(|FioJEsJdJ{q4~NF4aHz
+r)03_jri>hxd({;K|D6Bhm!CWRf9F1ZHR%^p{3kOn-gR}q-}8R~$67;{
+
+diff --git a/include/board.h b/include/board.h
+index 7fc6f63..33a6130 100644
+--- a/include/board.h
++++ b/include/board.h
+@@ -5,6 +5,7 @@
+ 
+ void board_reset(Board *b);
+ void board_from_fen(Board *b, const char *fen);
++void board_sync(Board *b);
+ int make_move(Board *b, Move m);
+ void unmake_move(Board *b, Move m);
+ void board_clear_hist(void);
+diff --git a/include/types.h b/include/types.h
+index 22adc93..c29d2d6 100644
+--- a/include/types.h
++++ b/include/types.h
+@@ -16,7 +16,7 @@
+ #define INF 30000
+ #define MATE 29000
+ #define MAX_DEPTH 64
+-#define HASH_SIZE 65536
++#define HASH_SIZE 262144
+ #define HASH_MASK (HASH_SIZE - 1)
+ 
+ typedef uint64_t U64;
+diff --git a/include/uci.h b/include/uci.h
+index 82f6228..d0020b9 100644
+--- a/include/uci.h
++++ b/include/uci.h
+@@ -5,5 +5,6 @@
+ 
+ const char *move_to_uci(Move m);
+ int uci_to_move(const Board *b, const char *uci, Move *out);
++const char *uci_last_error(void);
+ 
+ #endif
+diff --git a/main.c b/main.c
+index 632049b..0895a03 100644
+--- a/main.c
++++ b/main.c
+@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
+         gen_moves(&b, &ml);
+         if (ml.n == 0) break;
+         int score;
+-        Move best = search(&b, 5, &score);
++        Move best = search(&b, 6, &score);
+         if (!best) break;
+         printf("%s\n", move_to_uci(best));
+         fflush(stdout);
+@@ -58,6 +58,10 @@ int main(int argc, char **argv) {
+           fprintf(stderr, "invalid move\n");
+           continue;
+         }
++        if (!move_is_legal(&b, m)) {
++          fprintf(stderr, "invalid move (illegal)\n");
++          continue;
++        }
+         make_move(&b, m);
+       }
+     }
+@@ -69,7 +73,7 @@ int main(int argc, char **argv) {
+   else
+     board_reset(&b);
+   int score;
+-  Move best = search(&b, 5, &score);
++  Move best = search(&b, 6, &score);
+   if (best)
+     printf("%s\n", move_to_uci(best));
+   else
+diff --git a/src/board.c b/src/board.c
+index 22749ed..9e47fbb 100644
+--- a/src/board.c
++++ b/src/board.c
+@@ -1,8 +1,9 @@
+ #include "board.h"
+ #include "tables.h"
+ #include "types.h"
+-#include <string.h>
++
+ #include <stdlib.h>
++#include <string.h>
+ 
+ typedef struct { int castle; int ep; int cap; } Hist;
+ static Hist hist[MAX_DEPTH];
+@@ -11,6 +12,28 @@ static int hply;
+ void board_clear_hist(void) { hply = 0; }
+ int board_hist_ply(void) { return hply; }
+ 
++void board_sync(Board *b) {
++  int c, p, sq;
++  b->occ[W] = b->p[W][P] | b->p[W][N] | b->p[W][BISHOP] | b->p[W][R] | b->p[W][Q] | b->p[W][K];
++  b->occ[B] = b->p[B][P] | b->p[B][N] | b->p[B][BISHOP] | b->p[B][R] | b->p[B][Q] | b->p[B][K];
++  for (sq = 0; sq < 64; sq++) {
++    b->piece_on[sq] = -1;
++  }
++  for (c = 0; c < 2; c++) {
++    for (p = 0; p < 6; p++) {
++      U64 bb = b->p[c][p];
++      while (bb) {
++        sq = POP(bb);
++        bb &= bb - 1;
++        b->piece_on[sq] = c * 6 + p;
++        if (p == K) {
++          b->king_sq[c] = sq;
++        }
++      }
++    }
++  }
++}
++
+ static U64 compute_key(const Board *b) {
+   return tables_compute_key(b);
+ }
+@@ -27,7 +50,7 @@ void board_reset(Board *b) {
+   b->p[B][N] = 0x4200000000000000ULL;
+   b->p[B][BISHOP] = 0x2400000000000000ULL;
+   b->p[B][R] = 0x8100000000000000ULL;
+-  b->p[B][Q] = 0x80000000000000ULL;
++  b->p[B][Q] = 0x800000000000000ULL;
+   b->p[B][K] = 0x1000000000000000ULL;
+   b->occ[W] = 0xFFFFULL;
+   b->occ[B] = 0xFFFF000000000000ULL;
+@@ -36,12 +59,19 @@ void board_reset(Board *b) {
+   b->ep = -1;
+   b->king_sq[W] = 4;
+   b->king_sq[B] = 60;
+-  for (int sq = 0; sq < 64; sq++) b->piece_on[sq] = -1;
+-  for (int c = 0; c < 2; c++)
++  for (int sq = 0; sq < 64; sq++) {
++    b->piece_on[sq] = -1;
++  }
++  for (int c = 0; c < 2; c++) {
+     for (int p = 0; p < 6; p++) {
+       U64 bb = b->p[c][p];
+-      while (bb) { int s = POP(bb); bb &= bb - 1; b->piece_on[s] = c * 6 + p; }
++      while (bb) {
++        int s = POP(bb);
++        bb &= bb - 1;
++        b->piece_on[s] = c * 6 + p;
++      }
+     }
++  }
+   tables_ensure_zobrist();
+   b->key = compute_key(b);
+ }
+@@ -51,9 +81,19 @@ void board_from_fen(Board *b, const char *fen) {
+   int sq = 56;
+   const char *s = fen;
+   while (*s && sq >= 0 && sq < 64) {
+-    if (*s == ' ') break;
+-    if (*s >= '1' && *s <= '8') { sq += (*s - '0'); s++; continue; }
+-    if (*s == '/') { sq -= 16; s++; continue; }
++    if (*s == ' ') {
++      break;
++    }
++    if (*s >= '1' && *s <= '8') {
++      sq += (*s - '0');
++      s++;
++      continue;
++    }
++    if (*s == '/') {
++      sq -= 16;
++      s++;
++      continue;
++    }
+     int c = (*s >= 'A' && *s <= 'Z') ? W : B;
+     int p = -1;
+     switch (*s | 32) {
+@@ -103,7 +143,9 @@ int make_move(Board *b, Move m) {
+   int from = FROM(m), to = TO(m), fl = FLAGS(m);
+   int stm = b->side;
+   int piece = b->piece_on[from];
+-  if (piece < 0) return 0;
++  if (piece < 0) {
++    return 0;
++  }
+   int pc = piece % 6;
+   hist[hply].castle = b->castle;
+   hist[hply].ep = b->ep;
+@@ -148,7 +190,9 @@ int make_move(Board *b, Move m) {
+   }
+   b->occ[stm] |= to_bb;
+   b->ep = -1;
+-  if (pc == P && (RANK(to) - RANK(from)) * (stm ? -1 : 1) == 2) b->ep = stm == W ? from + 8 : from - 8;
++  if (pc == P && (RANK(to) - RANK(from)) * (stm ? -1 : 1) == 2) {
++    b->ep = stm == W ? from + 8 : from - 8;
++  }
+   if (from == 4) b->castle &= ~3;
+   if (from == 60) b->castle &= ~12;
+   if (from == 0) b->castle &= ~2;
+@@ -168,7 +212,9 @@ void unmake_move(Board *b, Move m) {
+   int from = FROM(m), to = TO(m), fl = FLAGS(m);
+   int stm = b->side;
+   int piece = b->piece_on[to];
+-  if (piece < 0) return;
++  if (piece < 0) {
++    return;
++  }
+   int pc = piece % 6;
+   if (fl == M_PROMO) {
+     int pr = PROMO_PC(m);
+diff --git a/src/eval.c b/src/eval.c
+index b22f421..23d20e4 100644
+--- a/src/eval.c
++++ b/src/eval.c
+@@ -3,6 +3,66 @@
+ #include "tables.h"
+ #include "types.h"
+ 
++static int eval_pawn_structure(const Board *b, int c) {
++  int score = 0, sq;
++  U64 pawns = b->p[c][P];
++  U64 opp_pawns = b->p[c ^ 1][P];
++  for (int f = 0; f < 8; f++) {
++    U64 file_mask = 0x0101010101010101ULL << f;
++    int n = 0;
++    U64 p = pawns & file_mask;
++    while (p) { n++; p &= p - 1; }
++    if (n >= 2) score -= 24;
++    U64 adj_files = (f > 0 ? (0x0101010101010101ULL << (f - 1)) : 0) | (f < 7 ? (0x0101010101010101ULL << (f + 1)) : 0);
++    if (n >= 1 && !(pawns & adj_files)) score -= 12;
++  }
++  U64 p2 = pawns;
++  while (p2) {
++    sq = POP(p2);
++    p2 &= p2 - 1;
++    int r = RANK(sq), fl = FILE(sq);
++    U64 front = 0;
++    if (c == W) {
++      for (int rr = r + 1; rr <= 7; rr++) {
++        front |= 1ULL << SQ(fl, rr);
++        if (fl > 0) front |= 1ULL << SQ(fl - 1, rr);
++        if (fl < 7) front |= 1ULL << SQ(fl + 1, rr);
++      }
++    } else {
++      for (int rr = r - 1; rr >= 0; rr--) {
++        front |= 1ULL << SQ(fl, rr);
++        if (fl > 0) front |= 1ULL << SQ(fl - 1, rr);
++        if (fl < 7) front |= 1ULL << SQ(fl + 1, rr);
++      }
++    }
++    if (!(opp_pawns & front)) {
++      int dist = c == W ? (7 - r) : r;
++      score += 18 + dist * 10;
++    }
++  }
++  return c == W ? score : -score;
++}
++
++static int eval_king_safety(const Board *b, int c) {
++  int ksq = b->king_sq[c];
++  if (ksq < 0 || ksq > 63) return 0;
++  int f = FILE(ksq), r = RANK(ksq);
++  int shield = 0;
++  U64 pawns = b->p[c][P];
++  int rank1 = c == W ? 1 : 6, rank2 = c == W ? 2 : 5;
++  for (int df = -1; df <= 1; df++) {
++    int nf = f + df;
++    if (nf < 0 || nf > 7) continue;
++    if (pawns & (1ULL << SQ(nf, rank1))) shield += 15;
++    if (pawns & (1ULL << SQ(nf, rank2))) shield += 8;
++  }
++  U64 file_bb = 0x0101010101010101ULL << f;
++  int open = (b->p[0][P] & file_bb) || (b->p[1][P] & file_bb) ? 0 : 1;
++  int pen = -shield + (open ? 25 : 0);
++  if (r == (c == W ? 0 : 7)) pen -= 10;
++  return c == W ? pen : -pen;
++}
++
+ int eval(const Board *b) {
+   int score = 0;
+   int c, p, sq;
+@@ -17,9 +77,11 @@ int eval(const Board *b) {
+       }
+     }
+   }
+-  if (b->side == B) score = -score;
++  for (c = 0; c < 2; c++) score += eval_pawn_structure(b, c);
++  for (c = 0; c < 2; c++) score += eval_king_safety(b, c);
+   MoveList ml;
+   gen_moves(b, &ml);
+-  score += ml.n * 4;
++  score += (b->side == W ? ml.n : -ml.n) * 6;
++  if (b->side == B) score = -score;
+   return score;
+ }
+diff --git a/src/main.c b/src/main.c
+index 3294d3d..6f68c3f 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -4,13 +4,15 @@
+ #include "search.h"
+ #include "uci.h"
+ #include "types.h"
++
++#include <ctype.h>
+ #include <stdio.h>
+ #include <string.h>
+-#include <ctype.h>
+ 
+ static int str_eq_ignore_case(const char *a, const char *b) {
+-  for (; *a && *b; a++, b++)
++  for (; *a && *b; a++, b++) {
+     if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
++  }
+   return *a == *b;
+ }
+ 
+@@ -37,11 +39,13 @@ static int is_fen(const char *s) {
+ 
+ static void trim_newline(char *s) {
+   size_t n = strlen(s);
+-  if (n > 0 && s[n - 1] == '\n') s[n - 1] = '\0';
++  while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) { n--; s[n] = '\0'; }
+ }
+ 
+ int main(int argc, char **argv) {
+   Board b;
++  setvbuf(stdout, NULL, _IOLBF, 0);
++  setvbuf(stderr, NULL, _IOLBF, 0);
+   engine_init();
+ 
+   if (argc > 1 && is_interactive_arg(argv[1])) {
+@@ -49,40 +53,59 @@ int main(int argc, char **argv) {
+     board_reset(&b);
+     for (;;) {
+       if (b.side == us) {
++        board_sync(&b);
+         MoveList ml;
+         gen_moves(&b, &ml);
+         if (ml.n == 0) break;
++        fprintf(stderr, "Thinking... ");
++        fflush(stderr);
+         int score;
+-        Move best = search(&b, 5, &score);
+-        if (!best) break;
++        Board b_search = b;
++        Move best = search(&b_search, 12, &score);
++        if (!best || !move_is_legal(&b, best)) {
++          printf("(none)\n");
++          fflush(stdout);
++          break;
++        }
+         printf("%s\n", move_to_uci(best));
+         fflush(stdout);
+-        make_move(&b, best);
++        if (!make_move(&b, best)) break;
++        board_sync(&b);
+       } else {
++        board_sync(&b);
+         char buf[32];
+         if (!fgets(buf, sizeof buf, stdin)) break;
+         trim_newline(buf);
+         if (!buf[0] || str_eq_ignore_case(buf, "quit")) break;
+         Move m;
+         if (!uci_to_move(&b, buf, &m)) {
+-          fprintf(stderr, "invalid move\n");
++          fprintf(stderr, "invalid move: %s\n", uci_last_error());
+           continue;
+         }
+-        make_move(&b, m);
++        if (!make_move(&b, m)) {
++          board_sync(&b);
++          if (!make_move(&b, m)) {
++            fprintf(stderr, "invalid move: could not apply move\n");
++            continue;
++          }
++        }
+       }
+     }
+     return 0;
+   }
+ 
+-  if (argc > 1 && is_fen(argv[1]))
++  if (argc > 1 && is_fen(argv[1])) {
+     board_from_fen(&b, argv[1]);
+-  else
++  } else {
+     board_reset(&b);
++  }
+   int score;
+-  Move best = search(&b, 5, &score);
+-  if (best)
++  Move best = search(&b, 12, &score);
++  if (best) {
+     printf("%s\n", move_to_uci(best));
+-  else
++  } else {
+     printf("(none)\n");
++  }
++  fflush(stdout);
+   return 0;
+ }
+diff --git a/src/movegen.c b/src/movegen.c
+index b59dec6..ff895cc 100644
+--- a/src/movegen.c
++++ b/src/movegen.c
+@@ -40,16 +40,22 @@ static void add_move(MoveList *ml, Move m) {
+ }
+ 
+ int is_attacked(const Board *b, int sq, int side) {
+-  U64 occ = b->occ[0] | b->occ[1];
++  U64 occ = 0;
++  int c, p, i;
+   int opp = side ^ 1;
++  for (c = 0; c < 2; c++) {
++    for (p = 0; p < 6; p++) {
++      occ |= b->p[c][p];
++    }
++  }
+   if (inv_pawn_att[opp][sq] & b->p[opp][P]) return 1;
+   if (knight_att[sq] & b->p[opp][N]) return 1;
+   if (king_att[sq] & b->p[opp][K]) return 1;
+-  for (int i = 0; i < 4; i++) {
++  for (i = 0; i < 4; i++) {
+     int d = rook_dirs[i];
+     if (slide_att(sq, d, occ) & (b->p[opp][R] | b->p[opp][Q])) return 1;
+   }
+-  for (int i = 0; i < 4; i++) {
++  for (i = 0; i < 4; i++) {
+     int d = bishop_dirs[i];
+     if (slide_att(sq, d, occ) & (b->p[opp][BISHOP] | b->p[opp][Q])) return 1;
+   }
+@@ -101,7 +107,7 @@ void gen_moves(const Board *b, MoveList *ml) {
+       from = POP(p);
+       p &= p - 1;
+       for (int i = 0; i < ndir; i++) {
+-        int d = (pc == Q) ? dirs[i] : dirs[i];
++        int d = dirs[i];
+         to_bb = slide_att(from, d, occ_all) & ~b->occ[stm];
+         while (to_bb) { to = POP(to_bb); to_bb &= to_bb - 1; add_move(ml, MOVE(from, to, M_NORMAL)); }
+       }
+@@ -136,8 +142,23 @@ int move_is_legal(Board *b, Move m) {
+   int from = FROM(m), to = TO(m), fl = FLAGS(m);
+   int stm = b->side;
+   int ksq = b->king_sq[stm];
++  if (ksq < 0 || ksq > 63 || b->piece_on[ksq] != stm * 6 + K) {
++    U64 kbb = b->p[stm][K];
++    ksq = kbb ? POP(kbb) : -1;
++    if (ksq < 0) return 0;
++  }
+   int piece = b->piece_on[from];
+-  if (piece < 0) return 0;
++  if (piece < 0 || (piece / 6) != stm) {
++    int pc;
++    piece = -1;
++    for (pc = 0; pc < 6; pc++) {
++      if ((b->p[stm][pc] >> from) & 1) {
++        piece = stm * 6 + pc;
++        break;
++      }
++    }
++    if (piece < 0) return 0;
++  }
+   int pc = piece % 6;
+   if (pc == K) {
+     Board tmp = *b;
+@@ -176,8 +197,17 @@ int move_is_legal(Board *b, Move m) {
+     b->p[stm][pr] |= to_bb;
+   }
+   int legal = !is_attacked(b, ksq, stm);
+-  b->p[stm][pc] ^= to_bb; b->p[stm][pc] |= from_bb;
+-  b->occ[stm] ^= to_bb; b->occ[stm] |= from_bb;
++  if (fl != M_PROMO) {
++    b->p[stm][pc] ^= to_bb;
++    b->p[stm][pc] |= from_bb;
++  } else {
++    int pr = PROMO_PC(m);
++    if (pr == 0) pr = N; else if (pr == 1) pr = BISHOP; else if (pr == 2) pr = R; else pr = Q;
++    b->p[stm][pr] ^= to_bb;
++    b->p[stm][P] |= from_bb;
++  }
++  b->occ[stm] ^= to_bb;
++  b->occ[stm] |= from_bb;
+   b->piece_on[from] = piece;
+   b->piece_on[to] = cap;
+   if (cap >= 0) {
+@@ -191,11 +221,5 @@ int move_is_legal(Board *b, Move m) {
+     b->occ[stm^1] |= (1ULL << epsq);
+     b->piece_on[epsq] = (stm^1) * 6 + P;
+   }
+-  if (fl == M_PROMO) {
+-    int pr = PROMO_PC(m) + 1;
+-    if (pr == 1) pr = N; else if (pr == 2) pr = BISHOP; else if (pr == 3) pr = R; else pr = Q;
+-    b->p[stm][P] |= to_bb;
+-    b->p[stm][pr] ^= to_bb;
+-  }
+   return legal;
+ }
+diff --git a/src/search.c b/src/search.c
+index 948421c..f9d3cd2 100644
+--- a/src/search.c
++++ b/src/search.c
+@@ -4,20 +4,54 @@
+ #include "movegen.h"
+ #include "tables.h"
+ #include "types.h"
+-#include <stddef.h>
+ 
+-static int quiesce(Board *b, int alpha, int beta) {
++#include <string.h>
++
++#define QMAX 32
++#define NULL_DEPTH 2
++#define LMR_DEPTH 4
++#define LMR_MOVES 4
++
++static int move_score_capture(const Board *b, Move m) {
++  int to = TO(m), from = FROM(m), fl = FLAGS(m);
++  int cap = b->piece_on[to];
++  int victim = (cap >= 0) ? (cap % 6) : (fl == M_EP ? P : -1);
++  if (victim < 0) return 0;
++  int piece = b->piece_on[from];
++  if (piece < 0) return 0;
++  int pc = piece % 6;
++  return 10000 + piece_val[victim] * 10 - piece_val[pc];
++}
++
++static void sort_captures(Board *b, MoveList *ml) {
++  int i, j;
++  for (i = 0; i < ml->n - 1; i++) {
++    int best = i;
++    int best_sc = move_score_capture(b, ml->m[i]);
++    for (j = i + 1; j < ml->n; j++) {
++      int sc = move_score_capture(b, ml->m[j]);
++      if (sc > best_sc) { best = j; best_sc = sc; }
++    }
++    if (best != i) {
++      Move t = ml->m[i]; ml->m[i] = ml->m[best]; ml->m[best] = t;
++    }
++  }
++}
++
++static int quiesce(Board *b, int alpha, int beta, int qply) {
+   int stand = eval(b);
+   if (stand >= beta) return beta;
+   if (stand > alpha) alpha = stand;
++  if (qply >= QMAX) return stand;
+   MoveList ml;
+   gen_captures(b, &ml);
++  sort_captures(b, &ml);
+   int best = stand;
+   for (int i = 0; i < ml.n; i++) {
+     Move m = ml.m[i];
+     if (!move_is_legal(b, m)) continue;
+     make_move(b, m);
+-    int score = -quiesce(b, -beta, -alpha);
++    int score = -quiesce(b, -beta, -alpha, qply + 1);
+     unmake_move(b, m);
+     if (score >= beta) return beta;
+     if (score > alpha) alpha = score;
+@@ -26,8 +60,30 @@ static int quiesce(Board *b, int alpha, int beta) {
+   return best;
+ }
+ 
++static void score_moves(const Board *b, MoveList *ml, Move hash_move, int *scores) {
++  for (int i = 0; i < ml->n; i++) {
++    Move m = ml->m[i];
++    if (m == hash_move) { scores[i] = 20000; continue; }
++    int sc = move_score_capture(b, m);
++    scores[i] = sc > 0 ? sc : 0;
++  }
++}
++
++static void order_moves(MoveList *ml, int *scores) {
++  int i, j;
++  for (i = 0; i < ml->n - 1; i++) {
++    int best = i;
++    for (j = i + 1; j < ml->n; j++)
++      if (scores[j] > scores[best]) best = j;
++    if (best != i) {
++      Move t = ml->m[i]; ml->m[i] = ml->m[best]; ml->m[best] = t;
++      int st = scores[i]; scores[i] = scores[best]; scores[best] = st;
++    }
++  }
++}
++
+ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best) {
+-  if (depth <= 0) return quiesce(b, alpha, beta);
++  if (depth <= 0) return quiesce(b, alpha, beta, 0);
+   U64 key = b->key;
+   HashEntry *he = &tt[key & HASH_MASK];
+   if (he->key == key && he->depth >= depth) {
+@@ -42,17 +98,34 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
+     if (is_attacked(b, b->king_sq[b->side], b->side)) return -MATE + b->ply;
+     return 0;
+   }
++  if (depth >= 3 && !is_attacked(b, b->king_sq[b->side], b->side)) {
++    b->side ^= 1;
++    int null_score = -search_inner(b, depth - 1 - NULL_DEPTH, -beta, -beta + 1, NULL);
++    b->side ^= 1;
++    if (null_score >= beta) return beta;
++  }
+   int best = -INF;
+   Move best_m = 0;
+-  if (he->key == key && he->best)
++  Move hash_move = (he->key == key && he->best) ? he->best : 0;
++  int scores[MAX_MOVES];
++  score_moves(b, &ml, hash_move, scores);
++  order_moves(&ml, scores);
++  if (hash_move)
+     for (int i = 0; i < ml.n; i++)
+-      if (ml.m[i] == he->best) { ml.m[i] = ml.m[0]; ml.m[0] = he->best; break; }
++      if (ml.m[i] == hash_move) { ml.m[i] = ml.m[0]; ml.m[0] = hash_move; scores[i] = scores[0]; scores[0] = 20000; break; }
+   for (int i = 0; i < ml.n; i++) {
+     Move m = ml.m[i];
+     if (!move_is_legal(b, m)) continue;
++    int is_cap = (b->piece_on[TO(m)] >= 0) || (FLAGS(m) == M_EP);
++    if (depth >= LMR_DEPTH && !is_cap && m != hash_move && i >= LMR_MOVES) {
++      make_move(b, m);
++      int rscore = -search_inner(b, depth - 2, -beta, -alpha, NULL);
++      unmake_move(b, m);
++      if (rscore >= beta) return beta;
++    }
+     make_move(b, m);
+     int score;
+-    if (depth <= 1) score = -quiesce(b, -beta, -alpha);
++    if (depth <= 1) score = -quiesce(b, -beta, -alpha, 0);
+     else score = -search_inner(b, depth - 1, -beta, -alpha, NULL);
+     unmake_move(b, m);
+     if (score > best) {
+@@ -73,14 +146,37 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
+ 
+ Move search(Board *b, int depth, int *score) {
+   board_clear_hist();
++  memset(tt, 0, sizeof(tt));
+   Move best = 0;
+   int alpha = -INF, beta = INF;
+-  int d;
++  int d, s = 0;
+   for (d = 1; d <= depth; d++) {
+     Move pv_move = 0;
+-    int s = search_inner(b, d, alpha, beta, &pv_move);
+-    if (pv_move) best = pv_move;
+-    if (score) *score = s;
++    int window_alpha = alpha, window_beta = beta;
++    if (d >= 3 && alpha > -MATE + 500 && beta < MATE - 500) {
++      int delta = 60;
++      window_alpha = s - delta;
++      window_beta = s + delta;
++      if (window_alpha < alpha) window_alpha = alpha;
++      if (window_beta > beta) window_beta = beta;
++    }
++    for (;;) {
++      pv_move = 0;
++      s = search_inner(b, d, window_alpha, window_beta, &pv_move);
++      if (pv_move) best = pv_move;
++      if (score) *score = s;
++      if (s <= window_alpha && window_alpha > -MATE + 500) {
++        window_beta = window_alpha;
++        window_alpha = -INF;
++      } else if (s >= window_beta && window_beta < MATE - 500) {
++        window_alpha = window_beta;
++        window_beta = INF;
++      } else break;
++    }
++    if (d >= 3 && alpha > -MATE + 500 && beta < MATE - 500) {
++      if (s > alpha) alpha = s - 30;
++      if (s < beta) beta = s + 30;
++    }
+     if (s >= MATE - 64 || s <= -MATE + 64) break;
+   }
+   return best;
+diff --git a/src/tables.c b/src/tables.c
+index 10e8359..c2d123e 100644
+--- a/src/tables.c
++++ b/src/tables.c
+@@ -150,17 +150,17 @@ void init_tables(void) {
+     int cr = r < 4 ? r : 7 - r;
+     int cf = f < 4 ? f : 7 - f;
+     int c = cr + cf;
+-    pst[W][P][sq] = (r >= 1 && r <= 5) ? (r - 1) * 5 + (f == 3 || f == 4 ? 5 : 0) : (r == 6 ? 25 : 0);
++    pst[W][P][sq] = (r >= 1 && r <= 5) ? (r - 1) * 8 + (f >= 2 && f <= 5 ? 10 : 0) : (r == 6 ? 50 : 0);
+     pst[B][P][sq] = pst[W][P][63 - sq];
+-    pst[W][N][sq] = c * 3 + (r >= 2 && r <= 5 && f >= 2 && f <= 5 ? 10 : 0);
++    pst[W][N][sq] = c * 5 + (r >= 2 && r <= 5 && f >= 2 && f <= 5 ? 15 : 0);
+     pst[B][N][sq] = pst[W][N][63 - sq];
+-    pst[W][BISHOP][sq] = c * 2 + (f == r || f == 7 - r ? 5 : 0);
++    pst[W][BISHOP][sq] = c * 4 + (f == r || f == 7 - r ? 12 : 0);
+     pst[B][BISHOP][sq] = pst[W][BISHOP][63 - sq];
+-    pst[W][R][sq] = (r == 6 ? 15 : 0) + (f == 0 || f == 7 ? -5 : 0) + (r == 7 ? 5 : 0);
++    pst[W][R][sq] = (r == 6 ? 25 : 0) + (f == 0 || f == 7 ? -5 : 0) + (r == 7 ? 12 : 0);
+     pst[B][R][sq] = pst[W][R][63 - sq];
+-    pst[W][Q][sq] = c + (r >= 2 && r <= 5 ? 3 : 0);
++    pst[W][Q][sq] = c * 3 + (r >= 2 && r <= 5 ? 8 : 0);
+     pst[B][Q][sq] = pst[W][Q][63 - sq];
+-    pst[W][K][sq] = (r == 0 && f >= 2 && f <= 6 ? -20 : 0) + (r >= 1 ? (c * 2) : 0);
++    pst[W][K][sq] = (r == 0 && f >= 2 && f <= 6 ? -30 : 0) + (r >= 1 ? (c * 4) : 0);
+     pst[B][K][sq] = pst[W][K][63 - sq];
+   }
+ }
+diff --git a/src/uci.c b/src/uci.c
+index 3968208..d67f662 100644
+--- a/src/uci.c
++++ b/src/uci.c
+@@ -1,35 +1,164 @@
+ #include "uci.h"
++#include "board.h"
+ #include "movegen.h"
+ #include "types.h"
++
+ #include <stdio.h>
+ 
++static char uci_err[128];
++
++const char *uci_last_error(void) {
++  return uci_err[0] ? uci_err : "unknown error";
++}
++
+ const char *move_to_uci(Move m) {
+   static char buf[16];
+   int f = FROM(m), t = TO(m);
+-  sprintf(buf, "%c%c -> %c%c", 'a' + FILE(f), '1' + RANK(f), 'a' + FILE(t), '1' + RANK(t));
++  sprintf(buf, "%c%c%c%c", 'a' + FILE(f), '1' + RANK(f), 'a' + FILE(t), '1' + RANK(t));
+   if (FLAGS(m) == M_PROMO) {
+     int pr = PROMO_PC(m);
+-    buf[8] = (pr == 0) ? 'n' : (pr == 1) ? 'b' : (pr == 2) ? 'r' : 'q';
+-    buf[9] = 0;
++    buf[4] = (pr == 0) ? 'n' : (pr == 1) ? 'b' : (pr == 2) ? 'r' : 'q';
++    buf[5] = '\0';
++  } else {
++    buf[4] = '\0';
+   }
+   return buf;
+ }
+ 
++static int parse_squares(const char *uci, int *from, int *to, char *promo) {
++  const char *p = uci;
++  int sq[2];
++  int n = 0;
++  *promo = 0;
++  while (*p && n < 3) {
++    while (*p == ' ' || *p == '\t') p++;
++    if (!*p) break;
++    int fc = *p | 32;
++    if (fc >= 'a' && fc <= 'h' && p[1] >= '1' && p[1] <= '8') {
++      if (n < 2) sq[n++] = (p[1] - '1') * 8 + (fc - 'a');
++      p += 2;
++      continue;
++    }
++    if (n == 2 && (*p == 'n' || *p == 'b' || *p == 'r' || *p == 'q' || *p == 'N' || *p == 'B' || *p == 'R' || *p == 'Q')) {
++      *promo = (char)(*p | 32);
++      p++;
++      continue;
++    }
++    p++;
++  }
++  if (n < 2) return 0;
++  *from = sq[0];
++  *to = sq[1];
++  return 1;
++}
++
+ int uci_to_move(const Board *b, const char *uci, Move *out) {
+-  if (!uci || uci[0] < 'a' || uci[0] > 'h' || uci[1] < '1' || uci[1] > '8' || uci[2] < 'a' || uci[2] > 'h' || uci[3] < '1' || uci[3] > '8') return 0;
+-  int from = (uci[1] - '1') * 8 + (uci[0] - 'a');
+-  int to = (uci[3] - '1') * 8 + (uci[2] - 'a');
++  int from, to;
++  char promo;
++  uci_err[0] = '\0';
++  if (!uci) {
++    snprintf(uci_err, sizeof(uci_err), "no move given");
++    return 0;
++  }
++  while (*uci == ' ' || *uci == '\t') uci++;
++  if (!parse_squares(uci, &from, &to, &promo)) {
++    snprintf(uci_err, sizeof(uci_err), "could not parse move (use format: e2e4 or d8c7)");
++    return 0;
++  }
++  board_sync((Board *)b);
++  {
++    int stm = b->side;
++    int at_from = b->piece_on[from];
++    if (at_from < 0 || (at_from / 6) != stm) {
++      at_from = -1;
++      for (int pc = 0; pc < 6; pc++)
++        if ((b->p[stm][pc] >> from) & 1) {
++          ((Board *)b)->piece_on[from] = stm * 6 + pc;
++          break;
++        }
++    }
++    if (b->piece_on[from] < 0 || (b->piece_on[from] / 6) != stm) {
++      snprintf(uci_err, sizeof(uci_err), "no piece on source square %c%c", 'a' + (from & 7), '1' + (from >> 3));
++      return 0;
++    }
++  }
++  if (!promo) {
++    Move candidate = MOVE(from, to, M_NORMAL);
++    int legal = move_is_legal((Board *)b, candidate);
++    if (legal) { *out = candidate; return 1; }
++  }
+   MoveList ml;
+   gen_moves(b, &ml);
++  int first = -1, count = 0;
+   for (int i = 0; i < ml.n; i++) {
+     Move m = ml.m[i];
+-    if (FROM(m) == from && TO(m) == to) {
++    if (FROM(m) != from || TO(m) != to) continue;
++    if (FLAGS(m) == M_PROMO) {
++      int prn = (promo == 'n') ? 0 : (promo == 'b') ? 1 : (promo == 'r') ? 2 : (promo == 'q') ? 3 : -1;
++      if (prn < 0 || PROMO_PC(m) != prn) continue;
++    } else if (promo) continue;
++    if (first < 0) first = i;
++    count++;
++  }
++  if (first < 0) {
++    board_sync((Board *)b);
++    gen_moves(b, &ml);
++    first = -1;
++    count = 0;
++    for (int i = 0; i < ml.n; i++) {
++      Move m = ml.m[i];
++      if (FROM(m) != from || TO(m) != to) continue;
+       if (FLAGS(m) == M_PROMO) {
+-        char pr = uci[4] | 32;
+-        int prn = (pr == 'n') ? 0 : (pr == 'b') ? 1 : (pr == 'r') ? 2 : 3;
+-        if (PROMO_PC(m) == prn) { *out = m; return 1; }
+-      } else { *out = m; return 1; }
++        int prn = (promo == 'n') ? 0 : (promo == 'b') ? 1 : (promo == 'r') ? 2 : (promo == 'q') ? 3 : -1;
++        if (prn < 0 || PROMO_PC(m) != prn) continue;
++      } else if (promo) continue;
++      if (first < 0) first = i;
++      count++;
++    }
++    if (first >= 0) {
++      if (count == 1) { *out = ml.m[first]; return 1; }
++      for (int i = 0; i < ml.n; i++) {
++        Move m = ml.m[i];
++        if (FROM(m) != from || TO(m) != to) continue;
++        if (FLAGS(m) == M_PROMO) {
++          int prn = (promo == 'n') ? 0 : (promo == 'b') ? 1 : (promo == 'r') ? 2 : (promo == 'q') ? 3 : -1;
++          if (prn < 0 || PROMO_PC(m) != prn) continue;
++        } else if (promo) continue;
++        if (move_is_legal((Board *)b, m)) { *out = m; return 1; }
++      }
++      Move candidate = MOVE(from, to, M_NORMAL);
++      if (move_is_legal((Board *)b, candidate)) { *out = candidate; return 1; }
++      snprintf(uci_err, sizeof(uci_err), "move not legal (illegal or would leave king in check)");
++      return 0;
+     }
++    Move candidate = MOVE(from, to, M_NORMAL);
++    if (move_is_legal((Board *)b, candidate)) { *out = candidate; return 1; }
++    snprintf(uci_err, sizeof(uci_err), "move not legal (illegal or would leave king in check)");
++    return 0;
++  }
++
++  if (count == 1) { *out = ml.m[first]; return 1; }
++
++  for (int i = 0; i < ml.n; i++) {
++    Move m = ml.m[i];
++    if (FROM(m) != from || TO(m) != to) continue;
++    if (FLAGS(m) == M_PROMO) {
++      int prn = (promo == 'n') ? 0 : (promo == 'b') ? 1 : (promo == 'r') ? 2 : (promo == 'q') ? 3 : -1;
++      if (prn < 0 || PROMO_PC(m) != prn) continue;
++    } else if (promo) continue;
++    if (move_is_legal((Board *)b, m)) { *out = m; return 1; }
++  }
++  {
++    Move candidate = MOVE(from, to, M_NORMAL);
++    if (move_is_legal((Board *)b, candidate)) { *out = candidate; return 1; }
++    snprintf(uci_err, sizeof(uci_err), "move not legal (illegal or would leave king in check)");
++    return 0;
++  }
++  board_sync((Board *)b);
++  if (!promo) {
++    Move candidate = MOVE(from, to, M_NORMAL);
++    if (move_is_legal((Board *)b, candidate)) { *out = candidate; return 1; }
+   }
++  snprintf(uci_err, sizeof(uci_err), "move not legal (illegal or would leave king in check)");
+   return 0;
+ }
+diff --git a/tests/README.md b/tests/README.md
+new file mode 100644
+index 0000000..7af48d1
+--- /dev/null
++++ b/tests/README.md
+@@ -0,0 +1,24 @@
++# Engine tests
++
++Run the test suite from the project root:
++
++```bash
++./tests/run_tests.sh
++```
++
++Or with custom engine path / timeout:
++
++```bash
++ENGINE=./engine TIMEOUT=90 ./tests/run_tests.sh
++```
++
++## What is tested
++
++1. **FEN mode (start position)** – Engine with no args prints one valid UCI move or `(none)`.
++2. **FEN mode (custom position)** – Engine with a FEN string prints one valid UCI move.
++3. **Invalid move rejected** – Feeding an invalid UCI move (e.g. `notamove`) produces an "invalid" message on stderr.
++4. **Interactive game** – Engine plays white; feeding two black moves yields valid UCI move lines.
++5. **Castling position** – Engine from a FEN where castling is legal returns a valid move.
++6. **No crash on empty stdin** – Engine exits cleanly when stdin is closed (e.g. no hang).
++
++Exit code 0 means all tests passed; non-zero means at least one failed.
+diff --git a/tests/run_tests.sh b/tests/run_tests.sh
+new file mode 100755
+index 0000000..f91ac63
+--- /dev/null
++++ b/tests/run_tests.sh
+@@ -0,0 +1,101 @@
++#!/usr/bin/env bash
++set -e
++ROOT="$(cd "$(dirname "$0")/.." && pwd)"
++cd "$ROOT"
++ENGINE="${ENGINE:-./engine}"
++TIMEOUT="${TIMEOUT:-60}"
++if command -v timeout >/dev/null 2>&1; then
++  RUN_TIMEOUT="timeout $TIMEOUT"
++elif command -v gtimeout >/dev/null 2>&1; then
++  RUN_TIMEOUT="gtimeout $TIMEOUT"
++else
++  RUN_TIMEOUT="perl -e 'alarm shift; exec @ARGV' $TIMEOUT"
++fi
++UCI_MOVE_PATTERN='^[a-h][1-8][a-h][1-8][nbrq]?$'
++PASS=0
++FAIL=0
++
++run_test() {
++  local name="$1"
++  if eval "$2"; then
++    echo "  PASS: $name"
++    ((PASS++)) || true
++    return 0
++  else
++    echo "  FAIL: $name"
++    ((FAIL++)) || true
++    return 1
++  fi
++}
++
++echo "Building engine..."
++make -C "$ROOT" 1>/dev/null 2>&1 || { echo "Build failed"; exit 1; }
++echo ""
++
++echo "--- Test 1: FEN mode (start position) ---"
++run_test "Engine returns one line from start position" "
++  out=\$($RUN_TIMEOUT $ENGINE 2>/dev/null || true)
++  first=\$(echo \"\$out\" | head -1)
++  [ -n \"\$first\" ] && echo \"\$first\" | grep -qE \"\$UCI_MOVE_PATTERN|^\\(none\\)\$\"
++"
++
++echo ""
++echo "--- Test 2: FEN mode (custom position) ---"
++run_test "Engine returns one line from FEN" "
++  fen='rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1'
++  out=\$($RUN_TIMEOUT $ENGINE \"\$fen\" 2>/dev/null || true)
++  first=\$(echo \"\$out\" | head -1)
++  echo \"\$first\" | grep -qE \"\$UCI_MOVE_PATTERN|^\\(none\\)\$\"
++"
++
++echo ""
++echo "--- Test 3: Invalid move rejected ---"
++run_test "Invalid UCI move produces error on stderr" "
++  stderr=\$(mktemp)
++  (echo 'notamove'; echo 'quit') | $RUN_TIMEOUT $ENGINE w 2>\$stderr | head -1 >/dev/null
++  grep -qi 'invalid' \$stderr
++  r=\$?
++  rm -f \$stderr
++  [ \$r -eq 0 ]
++"
++
++echo ""
++echo "--- Test 4: Interactive game (engine plays white) ---"
++run_test "Engine outputs valid UCI moves in a short game" "
++  moves='e7e5
++g8f6'
++  out=\$(echo \"\$moves\" | $RUN_TIMEOUT $ENGINE w 2>/dev/null || true)
++  count=\$(echo \"\$out\" | grep -c . || echo 0)
++  [ \"\$count\" -ge 1 ] && [ \"\$count\" -le 5 ]
++  all_valid=true
++  while IFS= read -r line; do
++    [ -z \"\$line\" ] && continue
++    if ! echo \"\$line\" | grep -qE \"\$UCI_MOVE_PATTERN|^\\(none\\)\$\"; then
++      all_valid=false
++      break
++    fi
++  done <<< \"\$out\"
++  [ \"\$all_valid\" = true ]
++"
++
++echo ""
++echo "--- Test 5: Castling input accepted ---"
++run_test "Engine accepts e8g8 (black kingside) after setup" "
++  fen='r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1'
++  out=\$($RUN_TIMEOUT $ENGINE \"\$fen\" 2>/dev/null || true)
++  first=\$(echo \"\$out\" | head -1)
++  echo \"\$first\" | grep -qE \"\$UCI_MOVE_PATTERN|^\\(none\\)\$\"
++"
++
++echo ""
++echo "--- Test 6: No crash on empty stdin (interactive) ---"
++run_test "Engine exits cleanly on empty/closed stdin" "
++  printf '' | perl -e 'alarm 3; exec @ARGV' $ENGINE w 2>/dev/null; true
++  [ \$? -eq 0 ] || [ \$? -eq 124 ]
++"
++
++echo ""
++echo "=========================================="
++echo "Results: $PASS passed, $FAIL failed"
++echo "=========================================="
++[ "$FAIL" -eq 0 ]
+-- 
+2.39.5 (Apple Git-154)

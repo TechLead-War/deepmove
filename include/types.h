@@ -16,7 +16,7 @@
 #define INF 30000
 #define MATE 29000
 #define MAX_DEPTH 64
-#define HASH_SIZE 65536
+#define HASH_SIZE 262144
 #define HASH_MASK (HASH_SIZE - 1)
 
 typedef uint64_t U64;

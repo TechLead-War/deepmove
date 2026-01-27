@@ -150,17 +150,17 @@ void init_tables(void) {
     int cr = r < 4 ? r : 7 - r;
     int cf = f < 4 ? f : 7 - f;
     int c = cr + cf;
-    pst[W][P][sq] = (r >= 1 && r <= 5) ? (r - 1) * 5 + (f == 3 || f == 4 ? 5 : 0) : (r == 6 ? 25 : 0);
+    pst[W][P][sq] = (r >= 1 && r <= 5) ? (r - 1) * 8 + (f >= 2 && f <= 5 ? 10 : 0) : (r == 6 ? 50 : 0);
     pst[B][P][sq] = pst[W][P][63 - sq];
-    pst[W][N][sq] = c * 3 + (r >= 2 && r <= 5 && f >= 2 && f <= 5 ? 10 : 0);
+    pst[W][N][sq] = c * 5 + (r >= 2 && r <= 5 && f >= 2 && f <= 5 ? 15 : 0);
     pst[B][N][sq] = pst[W][N][63 - sq];
-    pst[W][BISHOP][sq] = c * 2 + (f == r || f == 7 - r ? 5 : 0);
+    pst[W][BISHOP][sq] = c * 4 + (f == r || f == 7 - r ? 12 : 0);
     pst[B][BISHOP][sq] = pst[W][BISHOP][63 - sq];
-    pst[W][R][sq] = (r == 6 ? 15 : 0) + (f == 0 || f == 7 ? -5 : 0) + (r == 7 ? 5 : 0);
+    pst[W][R][sq] = (r == 6 ? 25 : 0) + (f == 0 || f == 7 ? -5 : 0) + (r == 7 ? 12 : 0);
     pst[B][R][sq] = pst[W][R][63 - sq];
-    pst[W][Q][sq] = c + (r >= 2 && r <= 5 ? 3 : 0);
+    pst[W][Q][sq] = c * 3 + (r >= 2 && r <= 5 ? 8 : 0);
     pst[B][Q][sq] = pst[W][Q][63 - sq];
-    pst[W][K][sq] = (r == 0 && f >= 2 && f <= 6 ? -20 : 0) + (r >= 1 ? (c * 2) : 0);
+    pst[W][K][sq] = (r == 0 && f >= 2 && f <= 6 ? -30 : 0) + (r >= 1 ? (c * 4) : 0);
     pst[B][K][sq] = pst[W][K][63 - sq];
   }
 }

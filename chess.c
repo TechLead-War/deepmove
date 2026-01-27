@@ -212,7 +212,7 @@ void board_reset(Board *b) {
   b->p[B][N] = 0x4200000000000000ULL;
   b->p[B][BISHOP] = 0x2400000000000000ULL;
   b->p[B][R] = 0x8100000000000000ULL;
-  b->p[B][Q] = 0x80000000000000ULL;
+  b->p[B][Q] = 0x800000000000000ULL;
   b->p[B][K] = 0x1000000000000000ULL;
   b->occ[W] = 0xFFFFULL;
   b->occ[B] = 0xFFFF000000000000ULL;
@@ -282,6 +282,18 @@ void board_from_fen(Board *b, const char *fen) {
   if (*s >= '0' && *s <= '9') { b->fifty = atoi(s); while (*s >= '0' && *s <= '9') s++; }
   if (!zobrist_piece[0][0][1]) init_zobrist();
   b->key = compute_key(b);
+}
+
+void board_sync(Board *b) {
+  int c, p, sq;
+  b->occ[W] = b->p[W][P] | b->p[W][N] | b->p[W][BISHOP] | b->p[W][R] | b->p[W][Q] | b->p[W][K];
+  b->occ[B] = b->p[B][P] | b->p[B][N] | b->p[B][BISHOP] | b->p[B][R] | b->p[B][Q] | b->p[B][K];
+  for (sq = 0; sq < 64; sq++) b->piece_on[sq] = -1;
+  for (c = 0; c < 2; c++)
+    for (p = 0; p < 6; p++) {
+      U64 bb = b->p[c][p];
+      while (bb) { sq = POP(bb); bb &= bb - 1; b->piece_on[sq] = c * 6 + p; if (p == K) b->king_sq[c] = sq; }
+    }
 }
 
 int is_attacked(const Board *b, int sq, int side) {
@@ -395,6 +407,7 @@ int move_is_legal(Board *b, Move m) {
   int ksq = b->king_sq[stm];
   int piece = b->piece_on[from];
   if (piece < 0) return 0;
+  if ((piece / 6) != stm) return 0;
   int pc = piece % 6;
   if (pc == K) {
     Board tmp = *b;
@@ -433,8 +446,17 @@ int move_is_legal(Board *b, Move m) {
     b->p[stm][pr] |= to_bb;
   }
   int legal = !is_attacked(b, ksq, stm);
-  b->p[stm][pc] ^= to_bb; b->p[stm][pc] |= from_bb;
-  b->occ[stm] ^= to_bb; b->occ[stm] |= from_bb;
+  if (fl != M_PROMO) {
+    b->p[stm][pc] ^= to_bb;
+    b->p[stm][pc] |= from_bb;
+  } else {
+    int pr = PROMO_PC(m);
+    if (pr == 0) pr = N; else if (pr == 1) pr = BISHOP; else if (pr == 2) pr = R; else pr = Q;
+    b->p[stm][pr] ^= to_bb;
+    b->p[stm][P] |= from_bb;
+  }
+  b->occ[stm] ^= to_bb;
+  b->occ[stm] |= from_bb;
   b->piece_on[from] = piece;
   b->piece_on[to] = cap;
   if (cap >= 0) {
@@ -447,12 +469,6 @@ int move_is_legal(Board *b, Move m) {
     b->p[stm^1][P] |= (1ULL << epsq);
     b->occ[stm^1] |= (1ULL << epsq);
     b->piece_on[epsq] = (stm^1) * 6 + P;
-  }
-  if (fl == M_PROMO) {
-    int pr = PROMO_PC(m) + 1;
-    if (pr == 1) pr = N; else if (pr == 2) pr = BISHOP; else if (pr == 3) pr = R; else pr = Q;
-    b->p[stm][P] |= to_bb;
-    b->p[stm][pr] ^= to_bb;
   }
   return legal;
 }
@@ -680,21 +696,61 @@ const char *move_to_uci(Move m) {
   return buf;
 }
 
+static int parse_squares(const char *uci, int *from, int *to, char *promo) {
+  const char *p = uci;
+  int sq[2];
+  int n = 0;
+  *promo = 0;
+  while (*p && n < 3) {
+    int fc = *p | 32;
+    if (fc >= 'a' && fc <= 'h' && p[1] >= '1' && p[1] <= '8') {
+      if (n < 2) sq[n++] = (p[1] - '1') * 8 + (fc - 'a');
+      p += 2;
+      continue;
+    }
+    if (n == 2 && (*p == 'n' || *p == 'b' || *p == 'r' || *p == 'q' || *p == 'N' || *p == 'B' || *p == 'R' || *p == 'Q')) {
+      *promo = (char)(*p | 32);
+      p++;
+      continue;
+    }
+    p++;
+  }
+  if (n < 2) return 0;
+  *from = sq[0];
+  *to = sq[1];
+  return 1;
+}
+
 int uci_to_move(const Board *b, const char *uci, Move *out) {
-  if (!uci || uci[0] < 'a' || uci[0] > 'h' || uci[1] < '1' || uci[1] > '8' || uci[2] < 'a' || uci[2] > 'h' || uci[3] < '1' || uci[3] > '8') return 0;
-  int from = (uci[1] - '1') * 8 + (uci[0] - 'a');
-  int to = (uci[3] - '1') * 8 + (uci[2] - 'a');
+  int from, to;
+  char promo;
+  if (!uci) return 0;
+  while (*uci == ' ' || *uci == '\t') uci++;
+  if (!parse_squares(uci, &from, &to, &promo)) return 0;
+  board_sync((Board *)b);
   MoveList ml;
   gen_moves(b, &ml);
+  int first = -1, count = 0;
   for (int i = 0; i < ml.n; i++) {
     Move m = ml.m[i];
-    if (FROM(m) == from && TO(m) == to) {
-      if (FLAGS(m) == M_PROMO) {
-        char pr = uci[4] | 32;
-        int prn = (pr == 'n') ? 0 : (pr == 'b') ? 1 : (pr == 'r') ? 2 : 3;
-        if (PROMO_PC(m) == prn) { *out = m; return 1; }
-      } else { *out = m; return 1; }
-    }
+    if (FROM(m) != from || TO(m) != to) continue;
+    if (FLAGS(m) == M_PROMO) {
+      int prn = (promo == 'n') ? 0 : (promo == 'b') ? 1 : (promo == 'r') ? 2 : (promo == 'q') ? 3 : -1;
+      if (prn < 0 || PROMO_PC(m) != prn) continue;
+    } else if (promo) continue;
+    if (first < 0) first = i;
+    count++;
+  }
+  if (first < 0) return 0;
+  if (count == 1) { *out = ml.m[first]; return 1; }
+  for (int i = 0; i < ml.n; i++) {
+    Move m = ml.m[i];
+    if (FROM(m) != from || TO(m) != to) continue;
+    if (FLAGS(m) == M_PROMO) {
+      int prn = (promo == 'n') ? 0 : (promo == 'b') ? 1 : (promo == 'r') ? 2 : (promo == 'q') ? 3 : -1;
+      if (prn < 0 || PROMO_PC(m) != prn) continue;
+    } else if (promo) continue;
+    if (move_is_legal((Board *)b, m)) { *out = m; return 1; }
   }
   return 0;
 }

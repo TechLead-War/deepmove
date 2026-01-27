@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
         gen_moves(&b, &ml);
         if (ml.n == 0) break;
         int score;
-        Move best = search(&b, 5, &score);
+        Move best = search(&b, 6, &score);
         if (!best) break;
         printf("%s\n", move_to_uci(best));
         fflush(stdout);
@@ -58,6 +58,10 @@ int main(int argc, char **argv) {
           fprintf(stderr, "invalid move\n");
           continue;
         }
+        if (!move_is_legal(&b, m)) {
+          fprintf(stderr, "invalid move (illegal)\n");
+          continue;
+        }
         make_move(&b, m);
       }
     }
@@ -69,7 +73,7 @@ int main(int argc, char **argv) {
   else
     board_reset(&b);
   int score;
-  Move best = search(&b, 5, &score);
+  Move best = search(&b, 6, &score);
   if (best)
     printf("%s\n", move_to_uci(best));
   else
