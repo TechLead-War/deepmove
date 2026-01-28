@@ -3,6 +3,14 @@
 #include "tables.h"
 #include "types.h"
 
+static inline int popcount(U64 x) {
+#if defined(_MSC_VER)
+  return (int)__popcnt64(x);
+#else
+  return (int)__builtin_popcountll(x);
+#endif
+}
+
 static int eval_pawn_structure(const Board *b, int c) {
   int score = 0, sq;
   U64 pawns = b->p[c][P];
@@ -63,6 +71,42 @@ static int eval_king_safety(const Board *b, int c) {
   return c == W ? pen : -pen;
 }
 
+static int eval_bishop_pair(const Board *b, int c) {
+  if (popcount(b->p[c][BISHOP]) >= 2) return c == W ? 30 : -30;
+  return 0;
+}
+
+static int eval_rook_activity(const Board *b, int c) {
+  int score = 0;
+  U64 rooks = b->p[c][R];
+  while (rooks) {
+    int sq = POP(rooks);
+    rooks &= rooks - 1;
+    int f = FILE(sq);
+    U64 file_mask = 0x0101010101010101ULL << f;
+    int own_pawn = (b->p[c][P] & file_mask) != 0;
+    int opp_pawn = (b->p[c ^ 1][P] & file_mask) != 0;
+    if (!own_pawn && !opp_pawn) score += 20;
+    else if (!own_pawn && opp_pawn) score += 12;
+    int rank = RANK(sq);
+    if ((c == W && rank == 6) || (c == B && rank == 1)) score += 10;
+  }
+  return c == W ? score : -score;
+}
+
+static int eval_mobility(const Board *b) {
+  Board tmp = *b;
+  MoveList ml;
+  int score = 0;
+  tmp.side = W;
+  gen_moves(&tmp, &ml);
+  score += ml.n * 4;
+  tmp.side = B;
+  gen_moves(&tmp, &ml);
+  score -= ml.n * 4;
+  return score;
+}
+
 int eval(const Board *b) {
   int score = 0;
   int c, p, sq;
@@ -79,9 +123,9 @@ int eval(const Board *b) {
   }
   for (c = 0; c < 2; c++) score += eval_pawn_structure(b, c);
   for (c = 0; c < 2; c++) score += eval_king_safety(b, c);
-  MoveList ml;
-  gen_moves(b, &ml);
-  score += (b->side == W ? ml.n : -ml.n) * 6;
+  for (c = 0; c < 2; c++) score += eval_bishop_pair(b, c);
+  for (c = 0; c < 2; c++) score += eval_rook_activity(b, c);
+  score += eval_mobility(b);
   if (b->side == B) score = -score;
   return score;
 }

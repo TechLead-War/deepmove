@@ -16,6 +16,7 @@ extern HashEntry tt[HASH_SIZE];
 
 void init_tables(void);
 U64 tables_compute_key(const Board *b);
+U64 tables_key_after_null(const Board *b);
 void tables_ensure_zobrist(void);
 int tables_zobrist_ready(void);
 

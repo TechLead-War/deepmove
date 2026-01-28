@@ -86,6 +86,12 @@ U64 tables_compute_key(const Board *b) {
   return k;
 }
 
+U64 tables_key_after_null(const Board *b) {
+  U64 k = b->key ^ zobrist_side;
+  if (b->ep >= 0 && b->ep < 64) k ^= zobrist_ep[FILE(b->ep)];
+  return k;
+}
+
 int tables_zobrist_ready(void) {
   return zobrist_piece[0][0][1] != 0;
 }
