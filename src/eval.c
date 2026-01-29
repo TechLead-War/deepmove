@@ -1,5 +1,6 @@
 #include "eval.h"
 #include "movegen.h"
+#include "params.h"
 #include "tables.h"
 #include "types.h"
 
@@ -94,16 +95,37 @@ static int eval_rook_activity(const Board *b, int c) {
   return c == W ? score : -score;
 }
 
+static int eval_king_attack(const Board *b) {
+  Board tmp = *b;
+  MoveList ml;
+  int score = 0;
+  for (int c = 0; c < 2; c++) {
+    int enemy = c ^ 1;
+    int ksq = b->king_sq[enemy];
+    if (ksq < 0 || ksq > 63) continue;
+    U64 zone = king_att[ksq] | (1ULL << ksq);
+    tmp.side = c;
+    gen_moves(&tmp, &ml);
+    int attacks = 0;
+    for (int i = 0; i < ml.n; i++) {
+      if (zone & (1ULL << TO(ml.m[i]))) attacks++;
+    }
+    int bonus = attacks * PARAM_KING_ATTACK_WEIGHT;
+    score += (c == W) ? bonus : -bonus;
+  }
+  return score;
+}
+
 static int eval_mobility(const Board *b) {
   Board tmp = *b;
   MoveList ml;
   int score = 0;
   tmp.side = W;
   gen_moves(&tmp, &ml);
-  score += ml.n * 4;
+  score += ml.n * PARAM_MOBILITY_WEIGHT;
   tmp.side = B;
   gen_moves(&tmp, &ml);
-  score -= ml.n * 4;
+  score -= ml.n * PARAM_MOBILITY_WEIGHT;
   return score;
 }
 
@@ -125,6 +147,7 @@ int eval(const Board *b) {
   for (c = 0; c < 2; c++) score += eval_king_safety(b, c);
   for (c = 0; c < 2; c++) score += eval_bishop_pair(b, c);
   for (c = 0; c < 2; c++) score += eval_rook_activity(b, c);
+  score += eval_king_attack(b);
   score += eval_mobility(b);
   if (b->side == B) score = -score;
   return score;

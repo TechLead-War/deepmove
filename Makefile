@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -O3 -Wall -Wextra -I include -DNDEBUG
-SRCS = src/tables.c src/board.c src/movegen.c src/eval.c src/search.c src/uci.c src/main.c
+SRCS = src/tables.c src/board.c src/movegen.c src/eval.c src/search.c src/uci.c src/params.c src/main.c
 TARGET = engine
 
 $(TARGET): $(SRCS)

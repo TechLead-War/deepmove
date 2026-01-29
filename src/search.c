@@ -2,17 +2,13 @@
 #include "board.h"
 #include "eval.h"
 #include "movegen.h"
+#include "params.h"
 #include "tables.h"
 #include "types.h"
 
 #include <string.h>
 #include <time.h>
 #include <stdlib.h>
-
-#define QMAX 32
-#define NULL_DEPTH 2
-#define LMR_DEPTH 4
-#define LMR_MOVES 4
 
 static Move killer_moves[2][MAX_DEPTH];
 static int history_heur[2][64][64];
@@ -135,7 +131,7 @@ static int quiesce(Board *b, int alpha, int beta, int qply) {
   int stand = eval(b);
   if (stand >= beta) return beta;
   if (stand > alpha) alpha = stand;
-  if (qply >= QMAX) return stand;
+  if (qply >= PARAM_QMAX) return stand;
   MoveList ml;
   gen_moves(b, &ml);
   int j = 0;
@@ -221,7 +217,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   if (depth >= 3 && !in_check) {
     NullState ns;
     make_null(b, &ns);
-    int null_score = -search_inner(b, depth - 1 - NULL_DEPTH, -beta, -beta + 1, NULL);
+    int null_score = -search_inner(b, depth - 1 - PARAM_NULL_DEPTH, -beta, -beta + 1, NULL);
     unmake_null(b, &ns);
     if (null_score >= beta) return beta;
   }
@@ -240,7 +236,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
     if (!move_is_legal(b, m)) continue;
     legal++;
     int is_cap = (b->piece_on[TO(m)] >= 0) || (FLAGS(m) == M_EP);
-    if (depth >= LMR_DEPTH && !is_cap && m != hash_move && i >= LMR_MOVES) {
+    if (depth >= PARAM_LMR_DEPTH && !is_cap && m != hash_move && i >= PARAM_LMR_MOVES) {
       make_move(b, m);
       int rscore = -search_inner(b, depth - 2, -beta, -alpha, NULL);
       unmake_move(b, m);
@@ -285,7 +281,7 @@ Move search(Board *b, int depth, int *score) {
   clear_search_heuristics();
   search_abort = 0;
   search_nodes = 0;
-  search_time_ms = 2000;
+  search_time_ms = PARAM_DEFAULT_MOVE_TIME_MS;
   const char *env_time = getenv("MOVE_TIME_MS");
   if (env_time && *env_time) {
     int v = atoi(env_time);

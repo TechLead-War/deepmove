@@ -1,6 +1,7 @@
 #include "engine.h"
 #include "board.h"
 #include "movegen.h"
+#include "params.h"
 #include "search.h"
 #include "uci.h"
 #include "types.h"
@@ -61,7 +62,7 @@ int main(int argc, char **argv) {
         fflush(stderr);
         int score;
         Board b_search = b;
-        Move best = search(&b_search, 12, &score);
+        Move best = search(&b_search, PARAM_DEFAULT_SEARCH_DEPTH, &score);
         if (!best || !move_is_legal(&b, best)) {
           printf("(none)\n");
           fflush(stdout);
@@ -100,7 +101,7 @@ int main(int argc, char **argv) {
     board_reset(&b);
   }
   int score;
-  Move best = search(&b, 12, &score);
+  Move best = search(&b, PARAM_DEFAULT_SEARCH_DEPTH, &score);
   if (best) {
     printf("%s\n", move_to_uci(best));
   } else {
