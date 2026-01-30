@@ -9,5 +9,6 @@ extern const int PARAM_MOBILITY_WEIGHT;
 extern const int PARAM_KING_ATTACK_WEIGHT;
 extern const int PARAM_DEFAULT_SEARCH_DEPTH;
 extern const int PARAM_DEFAULT_MOVE_TIME_MS;
+extern const int PARAM_MOVE_TIME_INCREMENT_MS;
 
 #endif

@@ -9,13 +9,15 @@
 #include <string.h>
 #include <time.h>
 #include <stdlib.h>
+#include <limits.h>
 
 static Move killer_moves[2][MAX_DEPTH];
 static int history_heur[2][64][64];
 static int search_abort;
-static int search_nodes;
+static long long search_nodes;
 static int search_time_ms;
 static clock_t search_deadline;
+static int search_last_depth;
 
 typedef struct {
   int ep;
@@ -77,7 +79,7 @@ static inline void clear_search_heuristics(void) {
 
 static inline void search_check_time(void) {
   if (search_time_ms <= 0) return;
-  if ((search_nodes & 1023) == 0) {
+  if ((search_nodes & 1023LL) == 0) {
     if (clock() >= search_deadline) search_abort = 1;
   }
 }
@@ -281,12 +283,25 @@ Move search(Board *b, int depth, int *score) {
   clear_search_heuristics();
   search_abort = 0;
   search_nodes = 0;
+  search_last_depth = 0;
   search_time_ms = PARAM_DEFAULT_MOVE_TIME_MS;
+  int increment_ms = PARAM_MOVE_TIME_INCREMENT_MS;
   const char *env_time = getenv("MOVE_TIME_MS");
   if (env_time && *env_time) {
     int v = atoi(env_time);
     if (v > 0) search_time_ms = v;
     else search_time_ms = 0;
+  }
+  const char *env_inc = getenv("MOVE_INCREMENT_MS");
+  if (env_inc && *env_inc) {
+    int v = atoi(env_inc);
+    if (v >= 0) increment_ms = v;
+  }
+  if (search_time_ms > 0 && increment_ms > 0) {
+    int moves_played = b->ply;
+    long long total = (long long)search_time_ms + (long long)increment_ms * moves_played;
+    if (total > INT_MAX) total = INT_MAX;
+    search_time_ms = (int)total;
   }
   if (search_time_ms > 0) {
     search_deadline = clock() + (clock_t)((search_time_ms * CLOCKS_PER_SEC) / 1000);
@@ -319,6 +334,7 @@ Move search(Board *b, int depth, int *score) {
       } else break;
     }
     if (search_abort) break;
+    search_last_depth = d;
     if (d >= 3 && alpha > -MATE + 500 && beta < MATE - 500) {
       if (s > alpha) alpha = s - 30;
       if (s < beta) beta = s + 30;
@@ -326,4 +342,12 @@ Move search(Board *b, int depth, int *score) {
     if (s >= MATE - 64 || s <= -MATE + 64) break;
   }
   return best;
+}
+
+int search_last_completed_depth(void) {
+  return search_last_depth;
+}
+
+long long search_last_nodes(void) {
+  return search_nodes;
 }

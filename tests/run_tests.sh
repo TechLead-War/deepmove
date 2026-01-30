@@ -12,6 +12,7 @@ else
   RUN_TIMEOUT="perl -e 'alarm shift; exec @ARGV' $TIMEOUT"
 fi
 UCI_MOVE_PATTERN='^[a-h][1-8][a-h][1-8][nbrq]?$'
+UCI_MOVE_WITH_TIME_PATTERN='^([a-h][1-8][a-h][1-8][nbrq]?|\\(none\\))( [0-9]+ms)?( d=[0-9]+)?( kn=[0-9]+)?( nps=[0-9]+)?$'
 PASS=0
 FAIL=0
 
@@ -36,7 +37,7 @@ echo "--- Test 1: FEN mode (start position) ---"
 run_test "Engine returns one line from start position" "
   out=\$($RUN_TIMEOUT $ENGINE 2>/dev/null || true)
   first=\$(echo \"\$out\" | head -1)
-  [ -n \"\$first\" ] && echo \"\$first\" | grep -qE \"\$UCI_MOVE_PATTERN|^\\(none\\)\$\"
+  [ -n \"\$first\" ] && echo \"\$first\" | grep -qE \"\$UCI_MOVE_WITH_TIME_PATTERN\"
 "
 
 echo ""
@@ -45,7 +46,7 @@ run_test "Engine returns one line from FEN" "
   fen='rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1'
   out=\$($RUN_TIMEOUT $ENGINE \"\$fen\" 2>/dev/null || true)
   first=\$(echo \"\$out\" | head -1)
-  echo \"\$first\" | grep -qE \"\$UCI_MOVE_PATTERN|^\\(none\\)\$\"
+  echo \"\$first\" | grep -qE \"\$UCI_MOVE_WITH_TIME_PATTERN\"
 "
 
 echo ""
@@ -70,7 +71,7 @@ g8f6'
   all_valid=true
   while IFS= read -r line; do
     [ -z \"\$line\" ] && continue
-    if ! echo \"\$line\" | grep -qE \"\$UCI_MOVE_PATTERN|^\\(none\\)\$\"; then
+    if ! echo \"\$line\" | grep -qE \"\$UCI_MOVE_WITH_TIME_PATTERN\"; then
       all_valid=false
       break
     fi
@@ -84,7 +85,7 @@ run_test "Engine accepts e8g8 (black kingside) after setup" "
   fen='r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1'
   out=\$($RUN_TIMEOUT $ENGINE \"\$fen\" 2>/dev/null || true)
   first=\$(echo \"\$out\" | head -1)
-  echo \"\$first\" | grep -qE \"\$UCI_MOVE_PATTERN|^\\(none\\)\$\"
+  echo \"\$first\" | grep -qE \"\$UCI_MOVE_WITH_TIME_PATTERN\"
 "
 
 echo ""
