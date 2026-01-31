@@ -1,6 +1,8 @@
 #include "tables.h"
 #include "types.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdint.h>
 
 static const int step[8] = {-8, -7, 1, 9, 8, 7, -1, -9};
 
@@ -14,6 +16,13 @@ int ray_dir[64][64];
 int pst[2][6][64];
 int piece_val[6];
 HashEntry tt[HASH_SIZE];
+
+typedef struct {
+  char magic[8];
+  uint32_t hash_size;
+  uint32_t entry_size;
+  uint32_t reserved;
+} TTHeader;
 
 static void init_rays(void) {
   int sq, dir, to;
@@ -169,4 +178,46 @@ void init_tables(void) {
     pst[W][K][sq] = (r == 0 && f >= 2 && f <= 6 ? -30 : 0) + (r >= 1 ? (c * 4) : 0);
     pst[B][K][sq] = pst[W][K][63 - sq];
   }
+}
+
+void tt_clear(void) {
+  memset(tt, 0, sizeof(tt));
+}
+
+static int tt_header_ok(const TTHeader *h) {
+  if (memcmp(h->magic, "TTv1", 4) != 0) return 0;
+  if (h->hash_size != HASH_SIZE) return 0;
+  if (h->entry_size != (uint32_t)sizeof(HashEntry)) return 0;
+  return 1;
+}
+
+int tt_load(const char *path) {
+  if (!path || !*path) return 0;
+  FILE *f = fopen(path, "rb");
+  if (!f) { tt_clear(); return 0; }
+  TTHeader h;
+  if (fread(&h, sizeof(h), 1, f) != 1) { fclose(f); tt_clear(); return 0; }
+  if (!tt_header_ok(&h)) { fclose(f); tt_clear(); return 0; }
+  size_t n = fread(tt, sizeof(HashEntry), HASH_SIZE, f);
+  fclose(f);
+  if (n != HASH_SIZE) {
+    tt_clear();
+    return 0;
+  }
+  return 1;
+}
+
+int tt_save(const char *path) {
+  if (!path || !*path) return 0;
+  FILE *f = fopen(path, "wb");
+  if (!f) return 0;
+  TTHeader h;
+  memset(&h, 0, sizeof(h));
+  memcpy(h.magic, "TTv1", 4);
+  h.hash_size = HASH_SIZE;
+  h.entry_size = (uint32_t)sizeof(HashEntry);
+  if (fwrite(&h, sizeof(h), 1, f) != 1) { fclose(f); return 0; }
+  size_t n = fwrite(tt, sizeof(HashEntry), HASH_SIZE, f);
+  fclose(f);
+  return n == HASH_SIZE;
 }

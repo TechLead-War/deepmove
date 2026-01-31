@@ -40,6 +40,7 @@ static void add_move(MoveList *ml, Move m) {
 }
 
 int is_attacked(const Board *b, int sq, int side) {
+  if (sq < 0 || sq >= 64) return 0;
   U64 occ = 0;
   int c, p, i;
   int opp = side ^ 1;
@@ -70,6 +71,10 @@ void gen_moves(const Board *b, MoveList *ml) {
   U64 empty = ~occ_all;
   U64 opp_pieces = b->occ[opp];
   int ksq = b->king_sq[stm];
+  if (ksq < 0 || ksq > 63) {
+    U64 kbb = b->p[stm][K];
+    ksq = kbb ? POP(kbb) : -1;
+  }
   U64 p, to_bb;
   int from, to;
   p = b->p[stm][P];
@@ -118,10 +123,18 @@ void gen_moves(const Board *b, MoveList *ml) {
     from = POP(p);
     to_bb = king_att[from] & ~b->occ[stm];
     while (to_bb) { to = POP(to_bb); to_bb &= to_bb - 1; add_move(ml, MOVE(from, to, M_NORMAL)); }
-    if (b->castle & (stm ? 4 : 1) && !(occ_all & (stm ? 0x6000000000000000ULL : 0x60ULL)) && !is_attacked(b, ksq, stm) && !is_attacked(b, stm ? 62 : 6, stm) && !is_attacked(b, stm ? 61 : 5, stm))
+    int rfrom_k = stm ? 63 : 7;
+    int rfrom_q = stm ? 56 : 0;
+    if (ksq >= 0 && (b->castle & (stm ? 4 : 1)) && (b->p[stm][R] & (1ULL << rfrom_k)) &&
+        !(occ_all & (stm ? 0x6000000000000000ULL : 0x60ULL)) &&
+        !is_attacked(b, ksq, stm) && !is_attacked(b, stm ? 62 : 6, stm) && !is_attacked(b, stm ? 61 : 5, stm)) {
       add_move(ml, MOVE(ksq, stm ? 62 : 6, M_CASTLE));
-    if (b->castle & (stm ? 8 : 2) && !(occ_all & (stm ? 0x0E00000000000000ULL : 0x0EULL)) && !is_attacked(b, ksq, stm) && !is_attacked(b, stm ? 58 : 2, stm) && !is_attacked(b, stm ? 59 : 3, stm))
+    }
+    if (ksq >= 0 && (b->castle & (stm ? 8 : 2)) && (b->p[stm][R] & (1ULL << rfrom_q)) &&
+        !(occ_all & (stm ? 0x0E00000000000000ULL : 0x0EULL)) &&
+        !is_attacked(b, ksq, stm) && !is_attacked(b, stm ? 58 : 2, stm) && !is_attacked(b, stm ? 59 : 3, stm)) {
       add_move(ml, MOVE(ksq, stm ? 58 : 2, M_CASTLE));
+    }
   }
 }
 
@@ -161,6 +174,10 @@ int move_is_legal(Board *b, Move m) {
   }
   int pc = piece % 6;
   if (pc == K) {
+    int df = FILE(to) - FILE(from);
+    if (df > 1 || df < -1) {
+      if (fl != M_CASTLE) return 0;
+    }
     Board tmp = *b;
     tmp.p[stm][K] ^= (1ULL << from) | (1ULL << to);
     tmp.occ[stm] ^= (1ULL << from) | (1ULL << to);
@@ -168,6 +185,7 @@ int move_is_legal(Board *b, Move m) {
     if (fl == M_CASTLE) {
       int rfrom = (to == 6 || to == 62) ? (to + 1) : (to - 2);
       int rto = (to == 6 || to == 62) ? (to - 1) : (to + 1);
+      if (!(tmp.p[stm][R] & (1ULL << rfrom))) return 0;
       tmp.p[stm][R] ^= (1ULL << rfrom) | (1ULL << rto);
       tmp.occ[stm] ^= (1ULL << rfrom) | (1ULL << rto);
     }

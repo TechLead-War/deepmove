@@ -198,15 +198,21 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   search_check_time();
   if (search_abort) return eval(b);
   int alpha_orig = alpha;
-  int in_check = is_attacked(b, b->king_sq[b->side], b->side);
+  int ksq = b->king_sq[b->side];
+  if (ksq < 0 || ksq > 63) {
+    U64 kbb = b->p[b->side][K];
+    ksq = kbb ? POP(kbb) : -1;
+  }
+  int in_check = (ksq >= 0) ? is_attacked(b, ksq, b->side) : 0;
   if (in_check && depth < MAX_DEPTH - 1) depth++;
   if (depth <= 0) return quiesce(b, alpha, beta, 0);
   U64 key = b->key;
   HashEntry *he = &tt[key & HASH_MASK];
   if (he->key == key && he->depth >= depth) {
     int tt_score = score_from_tt(he->score, b->ply);
-    if (pv_best && he->best && move_is_legal(b, he->best)) *pv_best = he->best;
-    if (he->flag == 0) return tt_score;
+    int best_ok = he->best && move_is_legal(b, he->best);
+    if (pv_best && best_ok) *pv_best = he->best;
+    if (he->flag == 0 && (!pv_best || best_ok)) return tt_score;
     if (he->flag == 1 && tt_score >= beta) return tt_score;
     if (he->flag == 2 && tt_score <= alpha) return tt_score;
   }
@@ -279,11 +285,13 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
 
 Move search(Board *b, int depth, int *score) {
   board_clear_hist();
-  memset(tt, 0, sizeof(tt));
+  if (PARAM_TT_CLEAR_ON_NEW_SEARCH) tt_clear();
   clear_search_heuristics();
   search_abort = 0;
   search_nodes = 0;
   search_last_depth = 0;
+  if (depth < 1) depth = 1;
+  if (depth > MAX_DEPTH - 1) depth = MAX_DEPTH - 1;
   search_time_ms = PARAM_DEFAULT_MOVE_TIME_MS;
   int increment_ms = PARAM_MOVE_TIME_INCREMENT_MS;
   const char *env_time = getenv("MOVE_TIME_MS");

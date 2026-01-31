@@ -54,7 +54,11 @@ static int eval_pawn_structure(const Board *b, int c) {
 
 static int eval_king_safety(const Board *b, int c) {
   int ksq = b->king_sq[c];
-  if (ksq < 0 || ksq > 63) return 0;
+  if (ksq < 0 || ksq > 63) {
+    U64 kbb = b->p[c][K];
+    if (!kbb) return 0;
+    ksq = POP(kbb);
+  }
   int f = FILE(ksq), r = RANK(ksq);
   int shield = 0;
   U64 pawns = b->p[c][P];

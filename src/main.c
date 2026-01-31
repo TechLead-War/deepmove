@@ -10,6 +10,45 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
+#include <limits.h>
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+static char tt_cache_path[PATH_MAX];
+static int tt_save_enabled = 0;
+
+static void save_tt_on_exit(void) {
+  if (tt_save_enabled && tt_cache_path[0]) {
+    tt_save(tt_cache_path);
+  }
+}
+
+static void init_tt_cache(void) {
+  int do_load = PARAM_TT_LOAD_ON_START;
+  int do_save = PARAM_TT_SAVE_ON_EXIT;
+  const char *path = PARAM_TT_CACHE_PATH;
+  const char *env_path = getenv("TT_CACHE_PATH");
+  if (env_path && *env_path) path = env_path;
+  const char *env_load = getenv("TT_LOAD");
+  if (env_load && *env_load) do_load = atoi(env_load) != 0;
+  const char *env_save = getenv("TT_SAVE");
+  if (env_save && *env_save) do_save = atoi(env_save) != 0;
+  const char *env_clear = getenv("TT_CLEAR");
+  if (env_clear && *env_clear && atoi(env_clear) != 0) {
+    do_load = 0;
+    tt_clear();
+  }
+  if (do_load) tt_load(path);
+  if (do_save && path && *path) {
+    strncpy(tt_cache_path, path, sizeof(tt_cache_path) - 1);
+    tt_cache_path[sizeof(tt_cache_path) - 1] = '\0';
+    tt_save_enabled = 1;
+    atexit(save_tt_on_exit);
+  }
+}
 
 static int str_eq_ignore_case(const char *a, const char *b) {
   for (; *a && *b; a++, b++) {
@@ -49,6 +88,7 @@ int main(int argc, char **argv) {
   setvbuf(stdout, NULL, _IOLBF, 0);
   setvbuf(stderr, NULL, _IOLBF, 0);
   engine_init();
+  init_tt_cache();
 
   if (argc > 1 && is_interactive_arg(argv[1])) {
     int us = our_color_from_arg(argv[1]);
@@ -72,6 +112,13 @@ int main(int argc, char **argv) {
         long long kn = nodes / 1000;
         long long nps = 0;
         if (ms > 0) nps = (nodes * 1000) / ms;
+        if (!best || !move_is_legal(&b, best)) {
+          MoveList ml_fallback;
+          gen_moves(&b, &ml_fallback);
+          for (int i = 0; i < ml_fallback.n; i++) {
+            if (move_is_legal(&b, ml_fallback.m[i])) { best = ml_fallback.m[i]; break; }
+          }
+        }
         if (!best || !move_is_legal(&b, best)) {
           printf("(none) %lldms d=%d kn=%lld nps=%lld\n", ms, depth_done, kn, nps);
           fflush(stdout);
@@ -119,6 +166,13 @@ int main(int argc, char **argv) {
   long long kn = nodes / 1000;
   long long nps = 0;
   if (ms > 0) nps = (nodes * 1000) / ms;
+  if (!best || !move_is_legal(&b, best)) {
+    MoveList ml_fallback;
+    gen_moves(&b, &ml_fallback);
+    for (int i = 0; i < ml_fallback.n; i++) {
+      if (move_is_legal(&b, ml_fallback.m[i])) { best = ml_fallback.m[i]; break; }
+    }
+  }
   if (best) {
     printf("%s %lldms d=%d kn=%lld nps=%lld\n", move_to_uci(best), ms, depth_done, kn, nps);
   } else {

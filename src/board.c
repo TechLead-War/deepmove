@@ -14,6 +14,8 @@ int board_hist_ply(void) { return hply; }
 
 void board_sync(Board *b) {
   int c, p, sq;
+  b->king_sq[W] = -1;
+  b->king_sq[B] = -1;
   b->occ[W] = b->p[W][P] | b->p[W][N] | b->p[W][BISHOP] | b->p[W][R] | b->p[W][Q] | b->p[W][K];
   b->occ[B] = b->p[B][P] | b->p[B][N] | b->p[B][BISHOP] | b->p[B][R] | b->p[B][Q] | b->p[B][K];
   for (sq = 0; sq < 64; sq++) {
@@ -78,12 +80,12 @@ void board_reset(Board *b) {
 
 void board_from_fen(Board *b, const char *fen) {
   memset(b, 0, sizeof(Board));
+  for (int i = 0; i < 64; i++) b->piece_on[i] = -1;
+  b->king_sq[W] = -1;
+  b->king_sq[B] = -1;
   int sq = 56;
   const char *s = fen;
-  while (*s && sq >= 0 && sq < 64) {
-    if (*s == ' ') {
-      break;
-    }
+  while (*s && *s != ' ') {
     if (*s >= '1' && *s <= '8') {
       sq += (*s - '0');
       s++;
@@ -105,9 +107,11 @@ void board_from_fen(Board *b, const char *fen) {
       case 'k': p = K; break;
     }
     if (p >= 0) {
-      b->p[c][p] |= 1ULL << sq;
-      b->piece_on[sq] = c * 6 + p;
-      if (p == K) b->king_sq[c] = sq;
+      if (sq >= 0 && sq < 64) {
+        b->p[c][p] |= 1ULL << sq;
+        b->piece_on[sq] = c * 6 + p;
+        if (p == K) b->king_sq[c] = sq;
+      }
       sq++;
     }
     s++;
@@ -160,6 +164,12 @@ int make_move(Board *b, Move m) {
     int c = cap / 6, p = cap % 6;
     b->p[c][p] ^= to_bb;
     b->occ[c] ^= to_bb;
+    if (p == R) {
+      if (to == 0) b->castle &= ~2;
+      if (to == 7) b->castle &= ~1;
+      if (to == 56) b->castle &= ~8;
+      if (to == 63) b->castle &= ~4;
+    }
   }
   b->piece_on[to] = piece;
   if (pc == P && fl == M_EP) {
