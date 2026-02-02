@@ -22,4 +22,7 @@ rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1
 
 So: `./engine "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1"` gives Black’s best reply.
 
+## Force play last engine move to a manual one.
+<br>
 
+```force <uci> or play <uci>```<br>Replaces the last engine move with your custom move.

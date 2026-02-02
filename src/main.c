@@ -83,6 +83,11 @@ static void trim_newline(char *s) {
   while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) { n--; s[n] = '\0'; }
 }
 
+static int starts_with_cmd(const char *s, const char *cmd) {
+  size_t n = strlen(cmd);
+  return strncmp(s, cmd, n) == 0;
+}
+
 int main(int argc, char **argv) {
   Board b;
   setvbuf(stdout, NULL, _IOLBF, 0);
@@ -93,6 +98,7 @@ int main(int argc, char **argv) {
   if (argc > 1 && is_interactive_arg(argv[1])) {
     int us = our_color_from_arg(argv[1]);
     board_reset(&b);
+    Move last_engine_move = 0;
     for (;;) {
       if (b.side == us) {
         board_sync(&b);
@@ -127,13 +133,46 @@ int main(int argc, char **argv) {
         printf("%s %lldms d=%d kn=%lld nps=%lld\n", move_to_uci(best), ms, depth_done, kn, nps);
         fflush(stdout);
         if (!make_move(&b, best)) break;
+        last_engine_move = best;
         board_sync(&b);
       } else {
         board_sync(&b);
-        char buf[32];
+        char buf[128];
         if (!fgets(buf, sizeof buf, stdin)) break;
         trim_newline(buf);
         if (!buf[0] || str_eq_ignore_case(buf, "quit")) break;
+        if (str_eq_ignore_case(buf, "undo")) {
+          if (last_engine_move) {
+            unmake_move(&b, last_engine_move);
+            last_engine_move = 0;
+          } else {
+            fprintf(stderr, "no engine move to undo\n");
+          }
+          continue;
+        }
+        if (starts_with_cmd(buf, "force ") || starts_with_cmd(buf, "play ")) {
+          const char *arg = buf + 6;
+          if (!last_engine_move) {
+            fprintf(stderr, "no engine move to replace\n");
+            continue;
+          }
+          unmake_move(&b, last_engine_move);
+          Move forced;
+          if (!uci_to_move(&b, arg, &forced)) {
+            fprintf(stderr, "invalid forced move: %s\n", uci_last_error());
+            make_move(&b, last_engine_move);
+            continue;
+          }
+          if (!make_move(&b, forced)) {
+            fprintf(stderr, "forced move could not be applied\n");
+            make_move(&b, last_engine_move);
+            continue;
+          }
+          last_engine_move = forced;
+          printf("%s 0ms d=0 kn=0 nps=0\n", move_to_uci(forced));
+          fflush(stdout);
+          continue;
+        }
         Move m;
         if (!uci_to_move(&b, buf, &m)) {
           fprintf(stderr, "invalid move: %s\n", uci_last_error());
