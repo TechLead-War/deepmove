@@ -1,4 +1,5 @@
 #include "tables.h"
+#include "params.h"
 #include "types.h"
 #include <string.h>
 #include <stdio.h>
@@ -154,12 +155,12 @@ void init_tables(void) {
     inv_pawn_att[W][sq] = (r >= 1 && f >= 1 ? (1ULL << (sq - 7)) : 0) | (r >= 1 && f <= 6 ? (1ULL << (sq - 9)) : 0);
     inv_pawn_att[B][sq] = (r <= 6 && f <= 6 ? (1ULL << (sq + 7)) : 0) | (r <= 6 && f >= 1 ? (1ULL << (sq + 9)) : 0);
   }
-  piece_val[P] = 100;
-  piece_val[N] = 320;
-  piece_val[BISHOP] = 330;
-  piece_val[R] = 500;
-  piece_val[Q] = 900;
-  piece_val[K] = 0;
+  piece_val[P] = PARAM_VAL_PAWN;
+  piece_val[N] = PARAM_VAL_KNIGHT;
+  piece_val[BISHOP] = PARAM_VAL_BISHOP;
+  piece_val[R] = PARAM_VAL_ROOK;
+  piece_val[Q] = PARAM_VAL_QUEEN;
+  piece_val[K] = PARAM_VAL_KING;
   for (sq = 0; sq < 64; sq++) {
     int r = RANK(sq), f = FILE(sq);
     int cr = r < 4 ? r : 7 - r;

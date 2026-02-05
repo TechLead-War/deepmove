@@ -21,9 +21,9 @@ static int eval_pawn_structure_side(const Board *b, int c) {
     int n = 0;
     U64 p = pawns & file_mask;
     while (p) { n++; p &= p - 1; }
-    if (n >= 2) score -= 24;
+    if (n >= 2) score -= PARAM_PAWN_DOUBLED_PENALTY;
     U64 adj_files = (f > 0 ? (0x0101010101010101ULL << (f - 1)) : 0) | (f < 7 ? (0x0101010101010101ULL << (f + 1)) : 0);
-    if (n >= 1 && !(pawns & adj_files)) score -= 12;
+    if (n >= 1 && !(pawns & adj_files)) score -= PARAM_PAWN_ISOLATED_PENALTY;
   }
   U64 p2 = pawns;
   while (p2) {
@@ -46,7 +46,7 @@ static int eval_pawn_structure_side(const Board *b, int c) {
     }
     if (!(opp_pawns & front)) {
       int dist = c == W ? (7 - r) : r;
-      score += 18 + dist * 10;
+      score += PARAM_PASSED_PAWN_BASE + dist * PARAM_PASSED_PAWN_ADVANCE;
     }
   }
   return c == W ? score : -score;
@@ -66,13 +66,13 @@ static int eval_king_safety_side(const Board *b, int c) {
   for (int df = -1; df <= 1; df++) {
     int nf = f + df;
     if (nf < 0 || nf > 7) continue;
-    if (pawns & (1ULL << SQ(nf, rank1))) shield += 15;
-    if (pawns & (1ULL << SQ(nf, rank2))) shield += 8;
+    if (pawns & (1ULL << SQ(nf, rank1))) shield += PARAM_KING_SHIELD_RANK1;
+    if (pawns & (1ULL << SQ(nf, rank2))) shield += PARAM_KING_SHIELD_RANK2;
   }
   U64 file_bb = 0x0101010101010101ULL << f;
   int open = (b->p[0][P] & file_bb) || (b->p[1][P] & file_bb) ? 0 : 1;
-  int pen = -shield + (open ? 25 : 0);
-  if (r == (c == W ? 0 : 7)) pen -= 10;
+  int pen = -shield + (open ? PARAM_KING_OPEN_FILE_PENALTY : 0);
+  if (r == (c == W ? 0 : 7)) pen -= PARAM_KING_BACK_RANK_PENALTY;
   return c == W ? pen : -pen;
 }
 
@@ -91,10 +91,10 @@ static int eval_rook_activity_side(const Board *b, int c) {
     U64 file_mask = 0x0101010101010101ULL << f;
     int own_pawn = (b->p[c][P] & file_mask) != 0;
     int opp_pawn = (b->p[c ^ 1][P] & file_mask) != 0;
-    if (!own_pawn && !opp_pawn) score += 20;
-    else if (!own_pawn && opp_pawn) score += 12;
+    if (!own_pawn && !opp_pawn) score += PARAM_ROOK_OPEN_FILE_BONUS;
+    else if (!own_pawn && opp_pawn) score += PARAM_ROOK_SEMI_OPEN_BONUS;
     int rank = RANK(sq);
-    if ((c == W && rank == 6) || (c == B && rank == 1)) score += 10;
+    if ((c == W && rank == 6) || (c == B && rank == 1)) score += PARAM_ROOK_SEVENTH_BONUS;
   }
   return c == W ? score * PARAM_ROOK_ACTIVITY_WEIGHT : -score * PARAM_ROOK_ACTIVITY_WEIGHT;
 }

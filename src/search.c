@@ -44,14 +44,14 @@ static inline int clamp_ply(int ply) {
 }
 
 static inline int score_to_tt(int score, int ply) {
-  if (score > MATE - 1000) return score + ply;
-  if (score < -MATE + 1000) return score - ply;
+  if (score > MATE - PARAM_MATE_SCORE_WINDOW) return score + ply;
+  if (score < -MATE + PARAM_MATE_SCORE_WINDOW) return score - ply;
   return score;
 }
 
 static inline int score_from_tt(int score, int ply) {
-  if (score > MATE - 1000) return score - ply;
-  if (score < -MATE + 1000) return score + ply;
+  if (score > MATE - PARAM_MATE_SCORE_WINDOW) return score - ply;
+  if (score < -MATE + PARAM_MATE_SCORE_WINDOW) return score + ply;
   return score;
 }
 
@@ -124,7 +124,7 @@ static inline void note_beta_cutoff(const Board *b, Move m, int depth) {
   int from = FROM(m), to = TO(m);
   int *h = &history_heur[b->side][from][to];
   *h += depth * depth;
-  if (*h > 2000000) *h /= 2;
+  if (*h > PARAM_HISTORY_MAX) *h /= 2;
 }
 
 static int move_score_capture(const Board *b, Move m) {
@@ -135,7 +135,7 @@ static int move_score_capture(const Board *b, Move m) {
   int score = 0;
   if (victim >= 0 && piece >= 0) {
     int pc = piece % 6;
-    score = 10000 + piece_val[victim] * 10 - piece_val[pc];
+    score = PARAM_CAPTURE_BASE_SCORE + piece_val[victim] * PARAM_CAPTURE_MVV_LVA_FACTOR - piece_val[pc];
   }
   if (fl == M_PROMO) score += 8000 + piece_val[promo_piece(m)];
   return score;
@@ -192,10 +192,10 @@ static void score_moves(const Board *b, MoveList *ml, Move hash_move, int *score
   int ply = clamp_ply(b->ply);
   for (int i = 0; i < ml->n; i++) {
     Move m = ml->m[i];
-    if (m == hash_move) { scores[i] = 30000; continue; }
+    if (m == hash_move) { scores[i] = PARAM_HASH_MOVE_SCORE; continue; }
     if (FLAGS(m) == M_PROMO) {
       int promo = promo_piece(m);
-      scores[i] = 25000 + piece_val[promo];
+      scores[i] = PARAM_PROMO_BASE_SCORE + piece_val[promo];
       if (is_capture(b, m)) scores[i] += move_score_capture(b, m);
       continue;
     }
@@ -204,8 +204,8 @@ static void score_moves(const Board *b, MoveList *ml, Move hash_move, int *score
       scores[i] = sc > 0 ? sc : 0;
       continue;
     }
-    if (m == killer_moves[0][ply]) { scores[i] = 9000; continue; }
-    if (m == killer_moves[1][ply]) { scores[i] = 8000; continue; }
+    if (m == killer_moves[0][ply]) { scores[i] = PARAM_KILLER_SCORE_1; continue; }
+    if (m == killer_moves[1][ply]) { scores[i] = PARAM_KILLER_SCORE_2; continue; }
     scores[i] = history_heur[b->side][FROM(m)][TO(m)];
   }
 }
@@ -250,7 +250,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   if (should_try_null(depth, in_check)) {
     NullState ns;
     make_null(b, &ns);
-    int null_score = -search_inner(b, depth - 1 - PARAM_NULL_DEPTH, -beta, -beta + 1, NULL);
+    int null_score = -search_inner(b, depth - PARAM_NULL_REDUCTION - PARAM_NULL_DEPTH, -beta, -beta + 1, NULL);
     unmake_null(b, &ns);
     if (null_score >= beta) return beta;
   }
@@ -262,7 +262,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   order_moves(&ml, scores);
   if (hash_move)
     for (int i = 0; i < ml.n; i++)
-      if (ml.m[i] == hash_move) { ml.m[i] = ml.m[0]; ml.m[0] = hash_move; scores[i] = scores[0]; scores[0] = 20000; break; }
+      if (ml.m[i] == hash_move) { ml.m[i] = ml.m[0]; ml.m[0] = hash_move; scores[i] = scores[0]; scores[0] = PARAM_HASH_MOVE_TOP_SCORE; break; }
   int legal = 0;
   for (int i = 0; i < ml.n; i++) {
     Move m = ml.m[i];
@@ -271,7 +271,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
     int is_cap = (b->piece_on[TO(m)] >= 0) || (FLAGS(m) == M_EP);
     if (should_lmr(depth, is_cap, m, hash_move, i)) {
       make_move(b, m);
-      int rscore = -search_inner(b, depth - 2, -beta, -alpha, NULL);
+      int rscore = -search_inner(b, depth - PARAM_LMR_REDUCTION, -beta, -alpha, NULL);
       unmake_move(b, m);
       if (rscore <= alpha) continue;
       if (rscore >= beta) {
@@ -341,8 +341,8 @@ Move search(Board *b, int depth, int *score) {
   for (d = 1; d <= depth; d++) {
     Move pv_move = 0;
     int window_alpha = alpha, window_beta = beta;
-    if (d >= 3 && alpha > -MATE + 500 && beta < MATE - 500) {
-      int delta = 60;
+    if (d >= 3 && alpha > -MATE + PARAM_MATE_WINDOW_MARGIN && beta < MATE - PARAM_MATE_WINDOW_MARGIN) {
+      int delta = PARAM_ASPIRATION_DELTA;
       window_alpha = s - delta;
       window_beta = s + delta;
       if (window_alpha < alpha) window_alpha = alpha;
@@ -354,21 +354,21 @@ Move search(Board *b, int depth, int *score) {
       if (search_abort) break;
       if (pv_move) best = pv_move;
       if (score) *score = s;
-      if (s <= window_alpha && window_alpha > -MATE + 500) {
+      if (s <= window_alpha && window_alpha > -MATE + PARAM_MATE_WINDOW_MARGIN) {
         window_beta = window_alpha;
         window_alpha = -INF;
-      } else if (s >= window_beta && window_beta < MATE - 500) {
+      } else if (s >= window_beta && window_beta < MATE - PARAM_MATE_WINDOW_MARGIN) {
         window_alpha = window_beta;
         window_beta = INF;
       } else break;
     }
     if (search_abort) break;
     search_last_depth = d;
-    if (d >= 3 && alpha > -MATE + 500 && beta < MATE - 500) {
-      if (s > alpha) alpha = s - 30;
-      if (s < beta) beta = s + 30;
+    if (d >= 3 && alpha > -MATE + PARAM_MATE_WINDOW_MARGIN && beta < MATE - PARAM_MATE_WINDOW_MARGIN) {
+      if (s > alpha) alpha = s - PARAM_ASPIRATION_GROW;
+      if (s < beta) beta = s + PARAM_ASPIRATION_GROW;
     }
-    if (s >= MATE - 64 || s <= -MATE + 64) break;
+    if (s >= MATE - PARAM_MATE_SCORE_CUTOFF || s <= -MATE + PARAM_MATE_SCORE_CUTOFF) break;
   }
   return best;
 }
