@@ -19,6 +19,17 @@ const int PARAM_HISTORY_MAX = 2000000;
 const int PARAM_NULL_REDUCTION = 1;
 const int PARAM_LMR_REDUCTION = 2;
 const int PARAM_MATE_SCORE_WINDOW = 1000;
+const int PARAM_RAZOR_MARGIN = 350;
+const int PARAM_FUTILITY_MARGIN = 120;
+const int PARAM_LMP_DEPTH = 2;
+const int PARAM_LMP_MOVES = 8;
+
+const int PARAM_PHASE_MAX = 24;
+const int PARAM_PHASE_PAWN = 0;
+const int PARAM_PHASE_KNIGHT = 1;
+const int PARAM_PHASE_BISHOP = 1;
+const int PARAM_PHASE_ROOK = 2;
+const int PARAM_PHASE_QUEEN = 4;
 
 const int PARAM_VAL_PAWN = 100;
 const int PARAM_VAL_KNIGHT = 320;

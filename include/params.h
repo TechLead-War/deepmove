@@ -20,6 +20,17 @@ extern const int PARAM_HISTORY_MAX;
 extern const int PARAM_NULL_REDUCTION;
 extern const int PARAM_LMR_REDUCTION;
 extern const int PARAM_MATE_SCORE_WINDOW;
+extern const int PARAM_RAZOR_MARGIN;
+extern const int PARAM_FUTILITY_MARGIN;
+extern const int PARAM_LMP_DEPTH;
+extern const int PARAM_LMP_MOVES;
+
+extern const int PARAM_PHASE_MAX;
+extern const int PARAM_PHASE_PAWN;
+extern const int PARAM_PHASE_KNIGHT;
+extern const int PARAM_PHASE_BISHOP;
+extern const int PARAM_PHASE_ROOK;
+extern const int PARAM_PHASE_QUEEN;
 
 extern const int PARAM_VAL_PAWN;
 extern const int PARAM_VAL_KNIGHT;

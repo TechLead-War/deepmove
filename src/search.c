@@ -106,6 +106,10 @@ static inline int should_lmr(int depth, int is_cap, Move m, Move hash_move, int 
   return depth >= PARAM_LMR_DEPTH && !is_cap && m != hash_move && move_index >= PARAM_LMR_MOVES;
 }
 
+static inline int should_lmp(int depth, int in_check, int is_cap, int move_index) {
+  return !in_check && depth <= PARAM_LMP_DEPTH && !is_cap && move_index >= PARAM_LMP_MOVES;
+}
+
 static inline void tt_store(HashEntry *he, U64 key, int depth, int alpha_orig, int beta, int score, Move best, int ply) {
   he->key = key;
   he->depth = depth;
@@ -164,15 +168,18 @@ static int quiesce(Board *b, int alpha, int beta, int qply) {
   if (stand >= beta) return beta;
   if (stand > alpha) alpha = stand;
   if (qply >= PARAM_QMAX) return stand;
+  int in_check = in_check_now(b);
   MoveList ml;
   gen_moves(b, &ml);
-  int j = 0;
-  for (int i = 0; i < ml.n; i++) {
-    Move m = ml.m[i];
-    if (!is_capture(b, m) && FLAGS(m) != M_PROMO) continue;
-    ml.m[j++] = m;
+  if (!in_check) {
+    int j = 0;
+    for (int i = 0; i < ml.n; i++) {
+      Move m = ml.m[i];
+      if (!is_capture(b, m) && FLAGS(m) != M_PROMO) continue;
+      ml.m[j++] = m;
+    }
+    ml.n = j;
   }
-  ml.n = j;
   sort_captures(b, &ml);
   int best = stand;
   for (int i = 0; i < ml.n; i++) {
@@ -231,6 +238,13 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   int in_check = in_check_now(b);
   if (in_check && depth < MAX_DEPTH - 1) depth++;
   if (depth <= 0) return quiesce(b, alpha, beta, 0);
+
+  int static_eval = 0;
+  if (!in_check) {
+    static_eval = eval(b);
+    if (depth <= 1 && static_eval + PARAM_FUTILITY_MARGIN <= alpha) return static_eval;
+    if (depth <= 2 && static_eval + PARAM_RAZOR_MARGIN <= alpha) return quiesce(b, alpha, beta, 0);
+  }
   U64 key = b->key;
   HashEntry *he = &tt[key & HASH_MASK];
   if (he->key == key && he->depth >= depth) {
@@ -269,6 +283,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
     if (!move_is_legal(b, m)) continue;
     legal++;
     int is_cap = (b->piece_on[TO(m)] >= 0) || (FLAGS(m) == M_EP);
+    if (should_lmp(depth, in_check, is_cap, i)) break;
     if (should_lmr(depth, is_cap, m, hash_move, i)) {
       make_move(b, m);
       int rscore = -search_inner(b, depth - PARAM_LMR_REDUCTION, -beta, -alpha, NULL);

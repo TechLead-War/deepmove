@@ -149,6 +149,17 @@ static int eval_mobility(const Board *b) {
   return score;
 }
 
+static int eval_phase(const Board *b) {
+  int phase = 0;
+  phase += popcount(b->p[W][N] | b->p[B][N]) * PARAM_PHASE_KNIGHT;
+  phase += popcount(b->p[W][BISHOP] | b->p[B][BISHOP]) * PARAM_PHASE_BISHOP;
+  phase += popcount(b->p[W][R] | b->p[B][R]) * PARAM_PHASE_ROOK;
+  phase += popcount(b->p[W][Q] | b->p[B][Q]) * PARAM_PHASE_QUEEN;
+  if (phase > PARAM_PHASE_MAX) phase = PARAM_PHASE_MAX;
+  if (phase < 0) phase = 0;
+  return phase;
+}
+
 static int eval_hanging_pieces(const Board *b, int c) {
   int penalty = 0;
   for (int pc = P; pc <= Q; pc++) {
@@ -185,21 +196,24 @@ static int eval_tempo(const Board *b) {
 }
 
 int eval(const Board *b) {
-  int score = 0;
-  score += eval_material_pst(b);
-  score += eval_pawn_structure_side(b, W) * PARAM_PAWN_STRUCTURE_WEIGHT;
-  score += eval_pawn_structure_side(b, B) * PARAM_PAWN_STRUCTURE_WEIGHT;
-  score += eval_king_safety_side(b, W) * PARAM_KING_SAFETY_WEIGHT;
-  score += eval_king_safety_side(b, B) * PARAM_KING_SAFETY_WEIGHT;
-  score += eval_bishop_pair_side(b, W);
-  score += eval_bishop_pair_side(b, B);
-  score += eval_rook_activity_side(b, W);
-  score += eval_rook_activity_side(b, B);
-  score += eval_hanging_pieces(b, W);
-  score += eval_hanging_pieces(b, B);
-  score += eval_king_attack(b);
-  score += eval_mobility(b);
-  score += eval_tempo(b);
+  int base = eval_material_pst(b);
+  int pawn = eval_pawn_structure_side(b, W) + eval_pawn_structure_side(b, B);
+  int king_safe = eval_king_safety_side(b, W) + eval_king_safety_side(b, B);
+  int bishop_pair = eval_bishop_pair_side(b, W) + eval_bishop_pair_side(b, B);
+  int rook_act = eval_rook_activity_side(b, W) + eval_rook_activity_side(b, B);
+  int hanging = eval_hanging_pieces(b, W) + eval_hanging_pieces(b, B);
+  int king_attack = eval_king_attack(b);
+  int mobility = eval_mobility(b);
+  int tempo = eval_tempo(b);
+
+  int phase = eval_phase(b);
+  int mg_w = phase;
+  int eg_w = PARAM_PHASE_MAX - phase;
+
+  int mg = king_safe * PARAM_KING_SAFETY_WEIGHT + king_attack + mobility * PARAM_MOBILITY_WEIGHT + tempo;
+  int eg = pawn * PARAM_PAWN_STRUCTURE_WEIGHT + rook_act + bishop_pair + hanging + tempo;
+
+  int score = base + (mg * mg_w + eg * eg_w) / PARAM_PHASE_MAX;
   if (b->side == B) score = -score;
   return score;
 }
