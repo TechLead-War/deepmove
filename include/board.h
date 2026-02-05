@@ -9,5 +9,6 @@ void board_sync(Board *b);
 int make_move(Board *b, Move m);
 void unmake_move(Board *b, Move m);
 void board_clear_hist(void);
+int board_is_repetition(const Board *b);
 
 #endif

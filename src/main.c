@@ -157,6 +157,8 @@ int main(int argc, char **argv) {
             continue;
           }
           unmake_move(&b, last_engine_move);
+          search_set_root_exclude(last_engine_move, b.key, b.ply);
+          tt_clear();
           Move forced;
           if (!uci_to_move(&b, arg, &forced)) {
             fprintf(stderr, "invalid forced move: %s\n", uci_last_error());

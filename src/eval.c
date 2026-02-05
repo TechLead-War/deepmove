@@ -142,10 +142,10 @@ static int eval_mobility(const Board *b) {
   int score = 0;
   tmp.side = W;
   gen_moves(&tmp, &ml);
-  score += ml.n * PARAM_MOBILITY_WEIGHT;
+  score += ml.n;
   tmp.side = B;
   gen_moves(&tmp, &ml);
-  score -= ml.n * PARAM_MOBILITY_WEIGHT;
+  score -= ml.n;
   return score;
 }
 

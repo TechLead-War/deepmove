@@ -6,5 +6,6 @@
 Move search(Board *b, int depth, int *score);
 int search_last_completed_depth(void);
 long long search_last_nodes(void);
+void search_set_root_exclude(Move m, U64 key, int ply);
 
 #endif

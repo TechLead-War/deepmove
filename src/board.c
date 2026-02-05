@@ -5,12 +5,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { int castle; int ep; int cap; } Hist;
-static Hist hist[MAX_DEPTH];
+typedef struct { int castle; int ep; int cap; int fifty; U64 key; } Hist;
+static Hist hist[HIST_SIZE];
 static int hply;
 
 void board_clear_hist(void) { hply = 0; }
 int board_hist_ply(void) { return hply; }
+
+int board_is_repetition(const Board *b) {
+  if (hply < 2) return 0;
+  int limit = hply - b->fifty - 1;
+  if (limit < 0) limit = 0;
+  for (int i = hply - 2; i >= limit; i -= 2) {
+    if (hist[i].key == b->key) return 1;
+  }
+  return 0;
+}
 
 void board_sync(Board *b) {
   int c, p, sq;
@@ -41,6 +51,7 @@ static U64 compute_key(const Board *b) {
 }
 
 void board_reset(Board *b) {
+  board_clear_hist();
   memset(b, 0, sizeof(Board));
   b->p[W][P] = 0xFF00ULL;
   b->p[W][N] = 0x42ULL;
@@ -79,6 +90,7 @@ void board_reset(Board *b) {
 }
 
 void board_from_fen(Board *b, const char *fen) {
+  board_clear_hist();
   memset(b, 0, sizeof(Board));
   for (int i = 0; i < 64; i++) b->piece_on[i] = -1;
   b->king_sq[W] = -1;
@@ -150,10 +162,13 @@ int make_move(Board *b, Move m) {
   if (piece < 0) {
     return 0;
   }
+  if (hply >= HIST_SIZE) return 0;
   int pc = piece % 6;
   hist[hply].castle = b->castle;
   hist[hply].ep = b->ep;
   hist[hply].cap = b->piece_on[to];
+  hist[hply].fifty = b->fifty;
+  hist[hply].key = b->key;
   hply++;
   U64 from_bb = 1ULL << from, to_bb = 1ULL << to;
   b->p[stm][pc] ^= from_bb;
@@ -203,6 +218,8 @@ int make_move(Board *b, Move m) {
   if (pc == P && (RANK(to) - RANK(from)) * (stm ? -1 : 1) == 2) {
     b->ep = stm == W ? from + 8 : from - 8;
   }
+  b->fifty++;
+  if (pc == P || cap >= 0 || fl == M_EP) b->fifty = 0;
   if (from == 4) b->castle &= ~3;
   if (from == 60) b->castle &= ~12;
   if (from == 0) b->castle &= ~2;
@@ -263,5 +280,6 @@ void unmake_move(Board *b, Move m) {
   }
   b->castle = hist[hply].castle;
   b->ep = hist[hply].ep;
+  b->fifty = hist[hply].fifty;
   b->key = compute_key(b);
 }

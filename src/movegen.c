@@ -7,6 +7,72 @@ static const int step[8] = {-8, -7, 1, 9, 8, 7, -1, -9};
 static const int rook_dirs[4] = {0, 2, 4, 6};
 static const int bishop_dirs[4] = {1, 3, 5, 7};
 
+static int first_blocker(int sq, int dir, U64 occ) {
+  int d = step[dir];
+  int f = FILE(sq), r = RANK(sq);
+  int i;
+  if (d == 1 || d == -1) {
+    for (i = sq + d; i >= 0 && i < 64 && (i / 8) == r; i += d) {
+      if (occ & (1ULL << i)) return i;
+    }
+  } else if (d == 8 || d == -8) {
+    for (i = sq + d; i >= 0 && i < 64 && (i % 8) == f; i += d) {
+      if (occ & (1ULL << i)) return i;
+    }
+  } else {
+    for (i = sq + d; i >= 0 && i < 64; i += d) {
+      int df = FILE(i) - f, dr = RANK(i) - r;
+      if (df < -1 || df > 1 || dr < -1 || dr > 1) break;
+      if (occ & (1ULL << i)) return i;
+      f = FILE(i);
+      r = RANK(i);
+    }
+  }
+  return -1;
+}
+
+static U64 attackers_to(U64 occ, int sq, int side, U64 pieces[2][6]) {
+  U64 att = 0;
+  att |= inv_pawn_att[side][sq] & pieces[side][P];
+  att |= knight_att[sq] & pieces[side][N];
+  att |= king_att[sq] & pieces[side][K];
+  for (int i = 0; i < 4; i++) {
+    int d = rook_dirs[i];
+    int bq = first_blocker(sq, d, occ);
+    if (bq >= 0) {
+      U64 bb = 1ULL << bq;
+      if (bb & (pieces[side][R] | pieces[side][Q])) att |= bb;
+    }
+  }
+  for (int i = 0; i < 4; i++) {
+    int d = bishop_dirs[i];
+    int bq = first_blocker(sq, d, occ);
+    if (bq >= 0) {
+      U64 bb = 1ULL << bq;
+      if (bb & (pieces[side][BISHOP] | pieces[side][Q])) att |= bb;
+    }
+  }
+  att &= ~(1ULL << sq);
+  return att;
+}
+
+static int least_attacker_sq(U64 att, int side, U64 pieces[2][6]) {
+  U64 bb = att & pieces[side][P];
+  if (bb) return POP(bb);
+  bb = att & pieces[side][N];
+  if (bb) return POP(bb);
+  bb = att & pieces[side][BISHOP];
+  if (bb) return POP(bb);
+  bb = att & pieces[side][R];
+  if (bb) return POP(bb);
+  bb = att & pieces[side][Q];
+  if (bb) return POP(bb);
+  bb = att & pieces[side][K];
+  if (bb) return POP(bb);
+  return -1;
+}
+
+
 static inline U64 slide_att(int sq, int dir, U64 occ) {
   U64 att = 0;
   int d = step[dir];
@@ -240,4 +306,72 @@ int move_is_legal(Board *b, Move m) {
     b->piece_on[epsq] = (stm^1) * 6 + P;
   }
   return legal;
+}
+
+int see(const Board *b, Move m) {
+  int from = FROM(m), to = TO(m), fl = FLAGS(m);
+  int side = b->side;
+  int piece = b->piece_on[from];
+  if (piece < 0) return 0;
+  int pc = piece % 6;
+  int cap_pc = -1;
+  if (fl == M_EP) {
+    cap_pc = P;
+  } else {
+    int cap = b->piece_on[to];
+    if (cap >= 0) cap_pc = cap % 6;
+  }
+  if (cap_pc < 0 && fl != M_PROMO) return 0;
+
+  int gain[32];
+  int depth = 0;
+  gain[0] = (cap_pc >= 0) ? piece_val[cap_pc] : 0;
+
+  U64 occ = b->occ[0] | b->occ[1];
+  U64 pieces[2][6];
+  for (int c = 0; c < 2; c++) for (int p = 0; p < 6; p++) pieces[c][p] = b->p[c][p];
+
+  pieces[side][pc] &= ~(1ULL << from);
+  occ &= ~(1ULL << from);
+  if (cap_pc >= 0 && fl != M_EP) {
+    pieces[side ^ 1][cap_pc] &= ~(1ULL << to);
+  } else if (fl == M_EP) {
+    int epsq = side == W ? to - 8 : to + 8;
+    pieces[side ^ 1][P] &= ~(1ULL << epsq);
+    occ &= ~(1ULL << epsq);
+  }
+  U64 att[2];
+  att[0] = attackers_to(occ, to, 0, pieces);
+  att[1] = attackers_to(occ, to, 1, pieces);
+
+  side ^= 1;
+  for (;;) {
+    U64 attackers = att[side];
+    if (!attackers) break;
+    int from_sq = least_attacker_sq(attackers, side, pieces);
+    if (from_sq < 0) break;
+    int attacker_pc = -1;
+    for (int p = 0; p < 6; p++) {
+      if (pieces[side][p] & (1ULL << from_sq)) { attacker_pc = p; break; }
+    }
+    if (attacker_pc < 0) break;
+    depth++;
+    gain[depth] = piece_val[attacker_pc] - gain[depth - 1];
+    {
+      int a = -gain[depth - 1];
+      int b = gain[depth];
+      int mx = a > b ? a : b;
+      if (mx < 0) break;
+    }
+    pieces[side][attacker_pc] &= ~(1ULL << from_sq);
+    occ &= ~(1ULL << from_sq);
+    att[0] = attackers_to(occ, to, 0, pieces);
+    att[1] = attackers_to(occ, to, 1, pieces);
+    side ^= 1;
+  }
+  for (int i = depth - 1; i >= 0; i--) {
+    int alt = -gain[i + 1];
+    if (alt > gain[i]) gain[i] = alt;
+  }
+  return gain[0];
 }

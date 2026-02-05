@@ -18,6 +18,7 @@
 #define MAX_DEPTH 64
 #define HASH_SIZE 262144
 #define HASH_MASK (HASH_SIZE - 1)
+#define HIST_SIZE 1024
 
 typedef uint64_t U64;
 typedef uint16_t Move;

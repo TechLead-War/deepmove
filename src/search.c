@@ -18,6 +18,10 @@ static long long search_nodes;
 static int search_time_ms;
 static clock_t search_deadline;
 static int search_last_depth;
+static int search_exclude_active;
+static Move search_exclude_move;
+static U64 search_exclude_key;
+static int search_exclude_ply;
 
 typedef struct {
   int ep;
@@ -79,7 +83,7 @@ static inline void clear_search_heuristics(void) {
 
 static inline void search_check_time(void) {
   if (search_time_ms <= 0) return;
-  if ((search_nodes & 1023LL) == 0) {
+  if (search_nodes % PARAM_TIME_CHECK_INTERVAL == 0) {
     if (clock() >= search_deadline) search_abort = 1;
   }
 }
@@ -98,8 +102,12 @@ static inline int in_check_now(const Board *b) {
   return (ksq >= 0) ? is_attacked(b, ksq, b->side) : 0;
 }
 
-static inline int should_try_null(int depth, int in_check) {
-  return depth >= 3 && !in_check;
+static inline int has_non_pawn_material(const Board *b, int side) {
+  return (b->p[side][N] | b->p[side][BISHOP] | b->p[side][R] | b->p[side][Q]) != 0;
+}
+
+static inline int should_try_null(const Board *b, int depth, int in_check) {
+  return depth >= 3 && !in_check && has_non_pawn_material(b, b->side);
 }
 
 static inline int should_lmr(int depth, int is_cap, Move m, Move hash_move, int move_index) {
@@ -108,6 +116,13 @@ static inline int should_lmr(int depth, int is_cap, Move m, Move hash_move, int 
 
 static inline int should_lmp(int depth, int in_check, int is_cap, int move_index) {
   return !in_check && depth <= PARAM_LMP_DEPTH && !is_cap && move_index >= PARAM_LMP_MOVES;
+}
+
+static inline int is_root_excluded(const Board *b, Move m) {
+  return search_exclude_active &&
+         b->ply == search_exclude_ply &&
+         b->key == search_exclude_key &&
+         m == search_exclude_move;
 }
 
 static inline void tt_store(HashEntry *he, U64 key, int depth, int alpha_orig, int beta, int score, Move best, int ply) {
@@ -141,7 +156,7 @@ static int move_score_capture(const Board *b, Move m) {
     int pc = piece % 6;
     score = PARAM_CAPTURE_BASE_SCORE + piece_val[victim] * PARAM_CAPTURE_MVV_LVA_FACTOR - piece_val[pc];
   }
-  if (fl == M_PROMO) score += 8000 + piece_val[promo_piece(m)];
+  if (fl == M_PROMO) score += PARAM_PROMO_CAPTURE_BONUS + piece_val[promo_piece(m)];
   return score;
 }
 
@@ -176,6 +191,7 @@ static int quiesce(Board *b, int alpha, int beta, int qply) {
     for (int i = 0; i < ml.n; i++) {
       Move m = ml.m[i];
       if (!is_capture(b, m) && FLAGS(m) != M_PROMO) continue;
+      if (see(b, m) < 0) continue;
       ml.m[j++] = m;
     }
     ml.n = j;
@@ -184,8 +200,9 @@ static int quiesce(Board *b, int alpha, int beta, int qply) {
   int best = stand;
   for (int i = 0; i < ml.n; i++) {
     Move m = ml.m[i];
+    if (is_root_excluded(b, m)) continue;
     if (!move_is_legal(b, m)) continue;
-    make_move(b, m);
+    if (!make_move(b, m)) continue;
     int score = -quiesce(b, -beta, -alpha, qply + 1);
     unmake_move(b, m);
     if (score >= beta) return beta;
@@ -195,25 +212,39 @@ static int quiesce(Board *b, int alpha, int beta, int qply) {
   return best;
 }
 
-static void score_moves(const Board *b, MoveList *ml, Move hash_move, int *scores) {
+static int move_gives_check(Board *b, Move m) {
+  if (!make_move(b, m)) return 0;
+  int check = in_check_now(b);
+  unmake_move(b, m);
+  return check;
+}
+
+static void score_moves(Board *b, MoveList *ml, Move hash_move, int *scores) {
   int ply = clamp_ply(b->ply);
   for (int i = 0; i < ml->n; i++) {
     Move m = ml->m[i];
-    if (m == hash_move) { scores[i] = PARAM_HASH_MOVE_SCORE; continue; }
-    if (FLAGS(m) == M_PROMO) {
+    int score = 0;
+    if (m == hash_move) {
+      score = PARAM_HASH_MOVE_SCORE;
+    } else if (FLAGS(m) == M_PROMO) {
       int promo = promo_piece(m);
-      scores[i] = PARAM_PROMO_BASE_SCORE + piece_val[promo];
-      if (is_capture(b, m)) scores[i] += move_score_capture(b, m);
-      continue;
-    }
-    if (is_capture(b, m)) {
+      score = PARAM_PROMO_BASE_SCORE + piece_val[promo];
+      if (is_capture(b, m)) score += move_score_capture(b, m);
+    } else if (is_capture(b, m)) {
       int sc = move_score_capture(b, m);
-      scores[i] = sc > 0 ? sc : 0;
-      continue;
+      int see_score = see(b, m);
+      if (see_score < 0) sc -= PARAM_SEE_BAD_PENALTY;
+      else if (see_score > 0) sc += PARAM_SEE_GOOD_BONUS;
+      score = sc > 0 ? sc : 0;
+    } else if (m == killer_moves[0][ply]) {
+      score = PARAM_KILLER_SCORE_1;
+    } else if (m == killer_moves[1][ply]) {
+      score = PARAM_KILLER_SCORE_2;
+    } else {
+      score = history_heur[b->side][FROM(m)][TO(m)];
     }
-    if (m == killer_moves[0][ply]) { scores[i] = PARAM_KILLER_SCORE_1; continue; }
-    if (m == killer_moves[1][ply]) { scores[i] = PARAM_KILLER_SCORE_2; continue; }
-    scores[i] = history_heur[b->side][FROM(m)][TO(m)];
+    if (PARAM_CHECK_BONUS > 0 && move_gives_check(b, m)) score += PARAM_CHECK_BONUS;
+    scores[i] = score;
   }
 }
 
@@ -234,6 +265,8 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   search_nodes++;
   search_check_time();
   if (search_abort) return eval(b);
+  if (b->fifty >= PARAM_FIFTY_MOVE_LIMIT) return 0;
+  if (board_is_repetition(b)) return 0;
   int alpha_orig = alpha;
   int in_check = in_check_now(b);
   if (in_check && depth < MAX_DEPTH - 1) depth++;
@@ -261,7 +294,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
     if (in_check) return -MATE + b->ply;
     return 0;
   }
-  if (should_try_null(depth, in_check)) {
+  if (should_try_null(b, depth, in_check)) {
     NullState ns;
     make_null(b, &ns);
     int null_score = -search_inner(b, depth - PARAM_NULL_REDUCTION - PARAM_NULL_DEPTH, -beta, -beta + 1, NULL);
@@ -278,26 +311,49 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
     for (int i = 0; i < ml.n; i++)
       if (ml.m[i] == hash_move) { ml.m[i] = ml.m[0]; ml.m[0] = hash_move; scores[i] = scores[0]; scores[0] = PARAM_HASH_MOVE_TOP_SCORE; break; }
   int legal = 0;
+  int first = 1;
   for (int i = 0; i < ml.n; i++) {
     Move m = ml.m[i];
+    if (is_root_excluded(b, m)) continue;
     if (!move_is_legal(b, m)) continue;
     legal++;
     int is_cap = (b->piece_on[TO(m)] >= 0) || (FLAGS(m) == M_EP);
     if (should_lmp(depth, in_check, is_cap, i)) break;
     if (should_lmr(depth, is_cap, m, hash_move, i)) {
-      make_move(b, m);
-      int rscore = -search_inner(b, depth - PARAM_LMR_REDUCTION, -beta, -alpha, NULL);
+      if (!make_move(b, m)) continue;
+      int gives_check = in_check_now(b);
+      int rscore = alpha + 1;
+      if (!gives_check) {
+        int rdepth = depth - PARAM_LMR_REDUCTION;
+        if (rdepth <= 0) rscore = -quiesce(b, -beta, -alpha, 0);
+        else rscore = -search_inner(b, rdepth, -beta, -alpha, NULL);
+      }
       unmake_move(b, m);
-      if (rscore <= alpha) continue;
-      if (rscore >= beta) {
-        note_beta_cutoff(b, m, depth);
-        return beta;
+      if (!gives_check) {
+        if (rscore <= alpha) continue;
+        if (rscore >= beta) {
+          note_beta_cutoff(b, m, depth);
+          return beta;
+        }
       }
     }
-    make_move(b, m);
+    if (!make_move(b, m)) continue;
+    int gives_check = in_check_now(b);
+    int next_depth = depth - 1;
+    if (gives_check && depth > 1 && next_depth < MAX_DEPTH - 1) next_depth += 1;
     int score;
-    if (depth <= 1) score = -quiesce(b, -beta, -alpha, 0);
-    else score = -search_inner(b, depth - 1, -beta, -alpha, NULL);
+    if (first) {
+      if (next_depth <= 0) score = -quiesce(b, -beta, -alpha, 0);
+      else score = -search_inner(b, next_depth, -beta, -alpha, NULL);
+      first = 0;
+    } else {
+      if (next_depth <= 0) score = -quiesce(b, -alpha - 1, -alpha, 0);
+      else score = -search_inner(b, next_depth, -alpha - 1, -alpha, NULL);
+      if (score > alpha && score < beta) {
+        if (next_depth <= 0) score = -quiesce(b, -beta, -alpha, 0);
+        else score = -search_inner(b, next_depth, -beta, -alpha, NULL);
+      }
+    }
     unmake_move(b, m);
     if (score > best) {
       best = score;
@@ -320,7 +376,6 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
 }
 
 Move search(Board *b, int depth, int *score) {
-  board_clear_hist();
   if (PARAM_TT_CLEAR_ON_NEW_SEARCH) tt_clear();
   clear_search_heuristics();
   search_abort = 0;
@@ -385,6 +440,7 @@ Move search(Board *b, int depth, int *score) {
     }
     if (s >= MATE - PARAM_MATE_SCORE_CUTOFF || s <= -MATE + PARAM_MATE_SCORE_CUTOFF) break;
   }
+  search_exclude_active = 0;
   return best;
 }
 
@@ -394,4 +450,11 @@ int search_last_completed_depth(void) {
 
 long long search_last_nodes(void) {
   return search_nodes;
+}
+
+void search_set_root_exclude(Move m, U64 key, int ply) {
+  search_exclude_move = m;
+  search_exclude_key = key;
+  search_exclude_ply = ply;
+  search_exclude_active = (m != 0);
 }
