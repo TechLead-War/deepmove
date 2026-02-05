@@ -84,6 +84,36 @@ static inline void search_check_time(void) {
   }
 }
 
+static inline int king_sq_safe(const Board *b, int side) {
+  int ksq = b->king_sq[side];
+  if (ksq < 0 || ksq > 63) {
+    U64 kbb = b->p[side][K];
+    ksq = kbb ? POP(kbb) : -1;
+  }
+  return ksq;
+}
+
+static inline int in_check_now(const Board *b) {
+  int ksq = king_sq_safe(b, b->side);
+  return (ksq >= 0) ? is_attacked(b, ksq, b->side) : 0;
+}
+
+static inline int should_try_null(int depth, int in_check) {
+  return depth >= 3 && !in_check;
+}
+
+static inline int should_lmr(int depth, int is_cap, Move m, Move hash_move, int move_index) {
+  return depth >= PARAM_LMR_DEPTH && !is_cap && m != hash_move && move_index >= PARAM_LMR_MOVES;
+}
+
+static inline void tt_store(HashEntry *he, U64 key, int depth, int alpha_orig, int beta, int score, Move best, int ply) {
+  he->key = key;
+  he->depth = depth;
+  he->score = score_to_tt(score, ply);
+  he->flag = (score >= beta) ? 1 : (score <= alpha_orig) ? 2 : 0;
+  he->best = best;
+}
+
 static inline void note_beta_cutoff(const Board *b, Move m, int depth) {
   if (is_capture(b, m) || FLAGS(m) == M_PROMO) return;
   int ply = clamp_ply(b->ply);
@@ -198,12 +228,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   search_check_time();
   if (search_abort) return eval(b);
   int alpha_orig = alpha;
-  int ksq = b->king_sq[b->side];
-  if (ksq < 0 || ksq > 63) {
-    U64 kbb = b->p[b->side][K];
-    ksq = kbb ? POP(kbb) : -1;
-  }
-  int in_check = (ksq >= 0) ? is_attacked(b, ksq, b->side) : 0;
+  int in_check = in_check_now(b);
   if (in_check && depth < MAX_DEPTH - 1) depth++;
   if (depth <= 0) return quiesce(b, alpha, beta, 0);
   U64 key = b->key;
@@ -222,7 +247,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
     if (in_check) return -MATE + b->ply;
     return 0;
   }
-  if (depth >= 3 && !in_check) {
+  if (should_try_null(depth, in_check)) {
     NullState ns;
     make_null(b, &ns);
     int null_score = -search_inner(b, depth - 1 - PARAM_NULL_DEPTH, -beta, -beta + 1, NULL);
@@ -244,7 +269,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
     if (!move_is_legal(b, m)) continue;
     legal++;
     int is_cap = (b->piece_on[TO(m)] >= 0) || (FLAGS(m) == M_EP);
-    if (depth >= PARAM_LMR_DEPTH && !is_cap && m != hash_move && i >= PARAM_LMR_MOVES) {
+    if (should_lmr(depth, is_cap, m, hash_move, i)) {
       make_move(b, m);
       int rscore = -search_inner(b, depth - 2, -beta, -alpha, NULL);
       unmake_move(b, m);
@@ -275,11 +300,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
     return 0;
   }
   if (search_abort) return eval(b);
-  he->key = key;
-  he->depth = depth;
-  he->score = score_to_tt(best, b->ply);
-  he->flag = (best >= beta) ? 1 : (best <= alpha_orig) ? 2 : 0;
-  he->best = best_m;
+  tt_store(he, key, depth, alpha_orig, beta, best, best_m, b->ply);
   return best;
 }
 

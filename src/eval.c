@@ -12,7 +12,7 @@ static inline int popcount(U64 x) {
 #endif
 }
 
-static int eval_pawn_structure(const Board *b, int c) {
+static int eval_pawn_structure_side(const Board *b, int c) {
   int score = 0, sq;
   U64 pawns = b->p[c][P];
   U64 opp_pawns = b->p[c ^ 1][P];
@@ -52,7 +52,7 @@ static int eval_pawn_structure(const Board *b, int c) {
   return c == W ? score : -score;
 }
 
-static int eval_king_safety(const Board *b, int c) {
+static int eval_king_safety_side(const Board *b, int c) {
   int ksq = b->king_sq[c];
   if (ksq < 0 || ksq > 63) {
     U64 kbb = b->p[c][K];
@@ -76,12 +76,12 @@ static int eval_king_safety(const Board *b, int c) {
   return c == W ? pen : -pen;
 }
 
-static int eval_bishop_pair(const Board *b, int c) {
-  if (popcount(b->p[c][BISHOP]) >= 2) return c == W ? 30 : -30;
+static int eval_bishop_pair_side(const Board *b, int c) {
+  if (popcount(b->p[c][BISHOP]) >= 2) return c == W ? PARAM_BISHOP_PAIR_BONUS : -PARAM_BISHOP_PAIR_BONUS;
   return 0;
 }
 
-static int eval_rook_activity(const Board *b, int c) {
+static int eval_rook_activity_side(const Board *b, int c) {
   int score = 0;
   U64 rooks = b->p[c][R];
   while (rooks) {
@@ -96,7 +96,15 @@ static int eval_rook_activity(const Board *b, int c) {
     int rank = RANK(sq);
     if ((c == W && rank == 6) || (c == B && rank == 1)) score += 10;
   }
-  return c == W ? score : -score;
+  return c == W ? score * PARAM_ROOK_ACTIVITY_WEIGHT : -score * PARAM_ROOK_ACTIVITY_WEIGHT;
+}
+
+static int attack_weight_for_piece(int pc) {
+  if (pc == P) return PARAM_ATTACK_WEIGHT_PAWN;
+  if (pc == N || pc == BISHOP) return PARAM_ATTACK_WEIGHT_MINOR;
+  if (pc == R) return PARAM_ATTACK_WEIGHT_ROOK;
+  if (pc == Q) return PARAM_ATTACK_WEIGHT_QUEEN;
+  return 0;
 }
 
 static int eval_king_attack(const Board *b) {
@@ -106,15 +114,23 @@ static int eval_king_attack(const Board *b) {
   for (int c = 0; c < 2; c++) {
     int enemy = c ^ 1;
     int ksq = b->king_sq[enemy];
-    if (ksq < 0 || ksq > 63) continue;
+    if (ksq < 0 || ksq > 63) {
+      U64 kbb = b->p[enemy][K];
+      if (!kbb) continue;
+      ksq = POP(kbb);
+    }
     U64 zone = king_att[ksq] | (1ULL << ksq);
     tmp.side = c;
     gen_moves(&tmp, &ml);
     int attacks = 0;
     for (int i = 0; i < ml.n; i++) {
-      if (zone & (1ULL << TO(ml.m[i]))) attacks++;
+      if (!(zone & (1ULL << TO(ml.m[i])))) continue;
+      int from = FROM(ml.m[i]);
+      int piece = b->piece_on[from];
+      if (piece < 0) continue;
+      attacks += attack_weight_for_piece(piece % 6);
     }
-    int bonus = attacks * PARAM_KING_ATTACK_WEIGHT;
+    int bonus = attacks * PARAM_KING_ATTACK_SCALE;
     score += (c == W) ? bonus : -bonus;
   }
   return score;
@@ -133,26 +149,57 @@ static int eval_mobility(const Board *b) {
   return score;
 }
 
-int eval(const Board *b) {
+static int eval_hanging_pieces(const Board *b, int c) {
+  int penalty = 0;
+  for (int pc = P; pc <= Q; pc++) {
+    U64 bb = b->p[c][pc];
+    while (bb) {
+      int sq = POP(bb);
+      bb &= bb - 1;
+      if (!is_attacked(b, sq, c)) continue;
+      if (is_attacked(b, sq, c ^ 1)) continue;
+      penalty += (piece_val[pc] * PARAM_HANGING_PENALTY_PCT) / 100;
+    }
+  }
+  return c == W ? -penalty : penalty;
+}
+
+static int eval_material_pst(const Board *b) {
   int score = 0;
-  int c, p, sq;
-  for (c = 0; c < 2; c++) {
+  for (int c = 0; c < 2; c++) {
     int sign = (c == W) ? 1 : -1;
-    for (p = 0; p < 6; p++) {
+    for (int p = 0; p < 6; p++) {
       U64 bb = b->p[c][p];
       while (bb) {
-        sq = POP(bb);
+        int sq = POP(bb);
         bb &= bb - 1;
         score += sign * (piece_val[p] + pst[c][p][sq]);
       }
     }
   }
-  for (c = 0; c < 2; c++) score += eval_pawn_structure(b, c);
-  for (c = 0; c < 2; c++) score += eval_king_safety(b, c);
-  for (c = 0; c < 2; c++) score += eval_bishop_pair(b, c);
-  for (c = 0; c < 2; c++) score += eval_rook_activity(b, c);
+  return score;
+}
+
+static int eval_tempo(const Board *b) {
+  return b->side == W ? PARAM_TEMPO_BONUS : -PARAM_TEMPO_BONUS;
+}
+
+int eval(const Board *b) {
+  int score = 0;
+  score += eval_material_pst(b);
+  score += eval_pawn_structure_side(b, W) * PARAM_PAWN_STRUCTURE_WEIGHT;
+  score += eval_pawn_structure_side(b, B) * PARAM_PAWN_STRUCTURE_WEIGHT;
+  score += eval_king_safety_side(b, W) * PARAM_KING_SAFETY_WEIGHT;
+  score += eval_king_safety_side(b, B) * PARAM_KING_SAFETY_WEIGHT;
+  score += eval_bishop_pair_side(b, W);
+  score += eval_bishop_pair_side(b, B);
+  score += eval_rook_activity_side(b, W);
+  score += eval_rook_activity_side(b, B);
+  score += eval_hanging_pieces(b, W);
+  score += eval_hanging_pieces(b, B);
   score += eval_king_attack(b);
   score += eval_mobility(b);
+  score += eval_tempo(b);
   if (b->side == B) score = -score;
   return score;
 }
