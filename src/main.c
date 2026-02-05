@@ -88,6 +88,41 @@ static int starts_with_cmd(const char *s, const char *cmd) {
   return strncmp(s, cmd, n) == 0;
 }
 
+static Move move_stack[HIST_SIZE];
+static int side_stack[HIST_SIZE];
+static int move_top = 0;
+
+static void reset_move_stack(void) {
+  move_top = 0;
+}
+
+static void record_move(Move m, int side) {
+  if (move_top >= HIST_SIZE) return;
+  move_stack[move_top] = m;
+  side_stack[move_top] = side;
+  move_top++;
+}
+
+static int pop_move(Move *m, int *side) {
+  if (move_top <= 0) return 0;
+  move_top--;
+  if (m) *m = move_stack[move_top];
+  if (side) *side = side_stack[move_top];
+  return 1;
+}
+
+static int peek_last_side(void) {
+  if (move_top <= 0) return -1;
+  return side_stack[move_top - 1];
+}
+
+static Move last_move_by_side(int side) {
+  for (int i = move_top - 1; i >= 0; i--) {
+    if (side_stack[i] == side) return move_stack[i];
+  }
+  return 0;
+}
+
 int main(int argc, char **argv) {
   Board b;
   setvbuf(stdout, NULL, _IOLBF, 0);
@@ -98,6 +133,7 @@ int main(int argc, char **argv) {
   if (argc > 1 && is_interactive_arg(argv[1])) {
     int us = our_color_from_arg(argv[1]);
     board_reset(&b);
+    reset_move_stack();
     Move last_engine_move = 0;
     for (;;) {
       if (b.side == us) {
@@ -133,6 +169,7 @@ int main(int argc, char **argv) {
         printf("%s %lldms d=%d kn=%lld nps=%lld\n", move_to_uci(best), ms, depth_done, kn, nps);
         fflush(stdout);
         if (!make_move(&b, best)) break;
+        record_move(best, us);
         last_engine_move = best;
         board_sync(&b);
       } else {
@@ -142,34 +179,56 @@ int main(int argc, char **argv) {
         trim_newline(buf);
         if (!buf[0] || str_eq_ignore_case(buf, "quit")) break;
         if (str_eq_ignore_case(buf, "undo")) {
-          if (last_engine_move) {
-            unmake_move(&b, last_engine_move);
-            last_engine_move = 0;
+          if (peek_last_side() == us) {
+            Move m;
+            pop_move(&m, NULL);
+            unmake_move(&b, m);
+            last_engine_move = last_move_by_side(us);
           } else {
             fprintf(stderr, "no engine move to undo\n");
           }
           continue;
         }
+        if (str_eq_ignore_case(buf, "takeback") || str_eq_ignore_case(buf, "undoopp")) {
+          if (move_top >= 2 && side_stack[move_top - 1] == us && side_stack[move_top - 2] == (us ^ 1)) {
+            Move m;
+            pop_move(&m, NULL);
+            unmake_move(&b, m);
+            pop_move(&m, NULL);
+            unmake_move(&b, m);
+            last_engine_move = last_move_by_side(us);
+          } else {
+            fprintf(stderr, "no opponent move to undo\n");
+          }
+          continue;
+        }
         if (starts_with_cmd(buf, "force ") || starts_with_cmd(buf, "play ")) {
           const char *arg = buf + 6;
-          if (!last_engine_move) {
+          if (peek_last_side() != us || !last_engine_move) {
             fprintf(stderr, "no engine move to replace\n");
             continue;
           }
-          unmake_move(&b, last_engine_move);
+          {
+            Move m;
+            pop_move(&m, NULL);
+            unmake_move(&b, m);
+          }
           search_set_root_exclude(last_engine_move, b.key, b.ply);
           tt_clear();
           Move forced;
           if (!uci_to_move(&b, arg, &forced)) {
             fprintf(stderr, "invalid forced move: %s\n", uci_last_error());
             make_move(&b, last_engine_move);
+            record_move(last_engine_move, us);
             continue;
           }
           if (!make_move(&b, forced)) {
             fprintf(stderr, "forced move could not be applied\n");
             make_move(&b, last_engine_move);
+            record_move(last_engine_move, us);
             continue;
           }
+          record_move(forced, us);
           last_engine_move = forced;
           printf("%s 0ms d=0 kn=0 nps=0\n", move_to_uci(forced));
           fflush(stdout);
@@ -187,6 +246,7 @@ int main(int argc, char **argv) {
             continue;
           }
         }
+        record_move(m, us ^ 1);
       }
     }
     return 0;
