@@ -12,6 +12,8 @@
 #include <time.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <signal.h>
+#include <unistd.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -24,6 +26,11 @@ static void save_tt_on_exit(void) {
   if (tt_save_enabled && tt_cache_path[0]) {
     tt_save(tt_cache_path);
   }
+}
+
+static void handle_signal(int sig) {
+  save_tt_on_exit();
+  _exit(128 + sig);
 }
 
 static void init_tt_cache(void) {
@@ -47,6 +54,8 @@ static void init_tt_cache(void) {
     tt_cache_path[sizeof(tt_cache_path) - 1] = '\0';
     tt_save_enabled = 1;
     atexit(save_tt_on_exit);
+    signal(SIGINT, handle_signal);
+    signal(SIGTERM, handle_signal);
   }
 }
 

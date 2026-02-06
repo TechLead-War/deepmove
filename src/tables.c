@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 static const int step[8] = {-8, -7, 1, 9, 8, 7, -1, -9};
 
@@ -17,6 +18,7 @@ int ray_dir[64][64];
 int pst[2][6][64];
 int piece_val[6];
 HashEntry tt[HASH_SIZE];
+static int tt_loaded_flag = 0;
 
 typedef struct {
   char magic[8];
@@ -24,6 +26,14 @@ typedef struct {
   uint32_t entry_size;
   uint32_t reserved;
 } TTHeader;
+
+typedef struct {
+  U64 key;
+  int depth;
+  int flag;
+  int score;
+  Move best;
+} TTLegacyEntry;
 
 static void init_rays(void) {
   int sq, dir, to;
@@ -183,12 +193,13 @@ void init_tables(void) {
 
 void tt_clear(void) {
   memset(tt, 0, sizeof(tt));
+  tt_loaded_flag = 0;
 }
 
 static int tt_header_ok(const TTHeader *h) {
-  if (memcmp(h->magic, "TTv1", 4) != 0) return 0;
+  if (memcmp(h->magic, "TTv2", 4) != 0 && memcmp(h->magic, "TTv1", 4) != 0) return 0;
   if (h->hash_size != HASH_SIZE) return 0;
-  if (h->entry_size != (uint32_t)sizeof(HashEntry)) return 0;
+  if (h->entry_size != (uint32_t)sizeof(HashEntry) && h->entry_size != (uint32_t)sizeof(TTLegacyEntry)) return 0;
   return 1;
 }
 
@@ -199,12 +210,31 @@ int tt_load(const char *path) {
   TTHeader h;
   if (fread(&h, sizeof(h), 1, f) != 1) { fclose(f); tt_clear(); return 0; }
   if (!tt_header_ok(&h)) { fclose(f); tt_clear(); return 0; }
-  size_t n = fread(tt, sizeof(HashEntry), HASH_SIZE, f);
-  fclose(f);
-  if (n != HASH_SIZE) {
-    tt_clear();
-    return 0;
+  if (h.entry_size == sizeof(HashEntry)) {
+    size_t n = fread(tt, sizeof(HashEntry), HASH_SIZE, f);
+    if (n != HASH_SIZE) { fclose(f); tt_clear(); return 0; }
+  } else {
+    TTLegacyEntry *tmp = (TTLegacyEntry *)malloc(sizeof(TTLegacyEntry) * HASH_SIZE);
+    if (!tmp) { fclose(f); tt_clear(); return 0; }
+    size_t n = fread(tmp, sizeof(TTLegacyEntry), HASH_SIZE, f);
+    if (n == HASH_SIZE) {
+      for (size_t i = 0; i < HASH_SIZE; i++) {
+        tt[i].key = tmp[i].key;
+        tt[i].depth = tmp[i].depth;
+        tt[i].flag = tmp[i].flag;
+        tt[i].score = tmp[i].score;
+        tt[i].best = tmp[i].best;
+        tt[i].gen = 0;
+      }
+    } else {
+      tt_clear();
+    }
+    free(tmp);
   }
+  fclose(f);
+  /* Treat loaded entries as fresh for the current run to allow TT time cuts. */
+  for (size_t i = 0; i < HASH_SIZE; i++) tt[i].gen = 0;
+  tt_loaded_flag = 1;
   return 1;
 }
 
@@ -214,11 +244,15 @@ int tt_save(const char *path) {
   if (!f) return 0;
   TTHeader h;
   memset(&h, 0, sizeof(h));
-  memcpy(h.magic, "TTv1", 4);
+  memcpy(h.magic, "TTv2", 4);
   h.hash_size = HASH_SIZE;
   h.entry_size = (uint32_t)sizeof(HashEntry);
   if (fwrite(&h, sizeof(h), 1, f) != 1) { fclose(f); return 0; }
   size_t n = fwrite(tt, sizeof(HashEntry), HASH_SIZE, f);
   fclose(f);
   return n == HASH_SIZE;
+}
+
+int tt_was_loaded(void) {
+  return tt_loaded_flag;
 }

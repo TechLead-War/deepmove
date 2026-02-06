@@ -13,6 +13,7 @@ extern int ray_dir[64][64];
 extern int pst[2][6][64];
 extern int piece_val[6];
 extern HashEntry tt[HASH_SIZE];
+int tt_was_loaded(void);
 
 void init_tables(void);
 U64 tables_compute_key(const Board *b);

@@ -13,11 +13,14 @@
 
 static Move killer_moves[2][MAX_DEPTH];
 static int history_heur[2][64][64];
+static Move counter_move[2][64][64];
 static int search_abort;
 static long long search_nodes;
 static int search_time_ms;
 static clock_t search_deadline;
+static clock_t search_start_time;
 static int search_last_depth;
+static uint8_t search_generation;
 static int search_exclude_active;
 static Move search_exclude_move;
 static U64 search_exclude_key;
@@ -79,6 +82,7 @@ static inline void unmake_null(Board *b, const NullState *st) {
 static inline void clear_search_heuristics(void) {
   memset(killer_moves, 0, sizeof(killer_moves));
   memset(history_heur, 0, sizeof(history_heur));
+  memset(counter_move, 0, sizeof(counter_move));
 }
 
 static inline void search_check_time(void) {
@@ -131,6 +135,7 @@ static inline void tt_store(HashEntry *he, U64 key, int depth, int alpha_orig, i
   he->score = score_to_tt(score, ply);
   he->flag = (score >= beta) ? 1 : (score <= alpha_orig) ? 2 : 0;
   he->best = best;
+  he->gen = search_generation;
 }
 
 static inline void note_beta_cutoff(const Board *b, Move m, int depth) {
@@ -219,8 +224,12 @@ static int move_gives_check(Board *b, Move m) {
   return check;
 }
 
-static void score_moves(Board *b, MoveList *ml, Move hash_move, int *scores) {
+static void score_moves(Board *b, MoveList *ml, Move hash_move, Move prev_move, int *scores) {
   int ply = clamp_ply(b->ply);
+  Move cm = 0;
+  if (prev_move) {
+    cm = counter_move[b->side][FROM(prev_move)][TO(prev_move)];
+  }
   for (int i = 0; i < ml->n; i++) {
     Move m = ml->m[i];
     int score = 0;
@@ -240,6 +249,8 @@ static void score_moves(Board *b, MoveList *ml, Move hash_move, int *scores) {
       score = PARAM_KILLER_SCORE_1;
     } else if (m == killer_moves[1][ply]) {
       score = PARAM_KILLER_SCORE_2;
+    } else if (cm && m == cm) {
+      score = PARAM_KILLER_SCORE_1 - 500; /* slightly below killer */
     } else {
       score = history_heur[b->side][FROM(m)][TO(m)];
     }
@@ -261,7 +272,7 @@ static void order_moves(MoveList *ml, int *scores) {
   }
 }
 
-static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best) {
+static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best, Move prev_move) {
   search_nodes++;
   search_check_time();
   if (search_abort) return eval(b);
@@ -297,7 +308,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   if (should_try_null(b, depth, in_check)) {
     NullState ns;
     make_null(b, &ns);
-    int null_score = -search_inner(b, depth - PARAM_NULL_REDUCTION - PARAM_NULL_DEPTH, -beta, -beta + 1, NULL);
+    int null_score = -search_inner(b, depth - PARAM_NULL_REDUCTION - PARAM_NULL_DEPTH, -beta, -beta + 1, NULL, 0);
     unmake_null(b, &ns);
     if (null_score >= beta) return beta;
   }
@@ -305,7 +316,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   Move best_m = 0;
   Move hash_move = (he->key == key && he->best) ? he->best : 0;
   int scores[MAX_MOVES];
-  score_moves(b, &ml, hash_move, scores);
+  score_moves(b, &ml, hash_move, prev_move, scores);
   order_moves(&ml, scores);
   if (hash_move)
     for (int i = 0; i < ml.n; i++)
@@ -326,13 +337,14 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
       if (!gives_check) {
         int rdepth = depth - PARAM_LMR_REDUCTION;
         if (rdepth <= 0) rscore = -quiesce(b, -beta, -alpha, 0);
-        else rscore = -search_inner(b, rdepth, -beta, -alpha, NULL);
+        else rscore = -search_inner(b, rdepth, -beta, -alpha, NULL, m);
       }
       unmake_move(b, m);
       if (!gives_check) {
         if (rscore <= alpha) continue;
         if (rscore >= beta) {
           note_beta_cutoff(b, m, depth);
+          if (prev_move) counter_move[b->side ^ 1][FROM(prev_move)][TO(prev_move)] = m;
           return beta;
         }
       }
@@ -344,14 +356,14 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
     int score;
     if (first) {
       if (next_depth <= 0) score = -quiesce(b, -beta, -alpha, 0);
-      else score = -search_inner(b, next_depth, -beta, -alpha, NULL);
+      else score = -search_inner(b, next_depth, -beta, -alpha, NULL, m);
       first = 0;
     } else {
       if (next_depth <= 0) score = -quiesce(b, -alpha - 1, -alpha, 0);
-      else score = -search_inner(b, next_depth, -alpha - 1, -alpha, NULL);
+      else score = -search_inner(b, next_depth, -alpha - 1, -alpha, NULL, m);
       if (score > alpha && score < beta) {
         if (next_depth <= 0) score = -quiesce(b, -beta, -alpha, 0);
-        else score = -search_inner(b, next_depth, -beta, -alpha, NULL);
+        else score = -search_inner(b, next_depth, -beta, -alpha, NULL, m);
       }
     }
     unmake_move(b, m);
@@ -359,8 +371,12 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
       best = score;
       best_m = m;
       if (pv_best) *pv_best = m;
+      if (prev_move && !is_cap && FLAGS(m) != M_PROMO) {
+        counter_move[b->side ^ 1][FROM(prev_move)][TO(prev_move)] = m;
+      }
       if (best >= beta) {
         note_beta_cutoff(b, m, depth);
+        if (prev_move) counter_move[b->side ^ 1][FROM(prev_move)][TO(prev_move)] = m;
         break;
       }
       if (best > alpha) alpha = best;
@@ -378,9 +394,12 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
 Move search(Board *b, int depth, int *score) {
   if (PARAM_TT_CLEAR_ON_NEW_SEARCH) tt_clear();
   clear_search_heuristics();
+  search_generation++;
+  if (search_generation == 0) { tt_clear(); search_generation = 1; }
   search_abort = 0;
   search_nodes = 0;
   search_last_depth = 0;
+  search_start_time = clock();
   if (depth < 1) depth = 1;
   if (depth > MAX_DEPTH - 1) depth = MAX_DEPTH - 1;
   search_time_ms = PARAM_DEFAULT_MOVE_TIME_MS;
@@ -402,12 +421,28 @@ Move search(Board *b, int depth, int *score) {
     if (total > INT_MAX) total = INT_MAX;
     search_time_ms = (int)total;
   }
+
+  /* If we already have TT data for this root (or any loaded TT), shorten time to reply faster using cached work. */
+  if (search_time_ms > 0) {
+    HashEntry *root_he = &tt[b->key & HASH_MASK];
+    int root_hit = (root_he->key == b->key && root_he->depth >= PARAM_TT_HIT_MIN_DEPTH);
+    int tt_loaded = tt_was_loaded();
+    if (root_hit || tt_loaded) {
+      int pct = root_hit ? PARAM_TT_HIT_TIME_PCT : 60; /* slightly looser cap if only general TT loaded */
+      int capped = (search_time_ms * pct) / 100;
+      if (capped < PARAM_TT_HIT_TIME_MS) capped = PARAM_TT_HIT_TIME_MS;
+      if (capped < search_time_ms) search_time_ms = capped;
+    }
+  }
   if (search_time_ms > 0) {
     search_deadline = clock() + (clock_t)((search_time_ms * CLOCKS_PER_SEC) / 1000);
   }
   Move best = 0;
   int alpha = -INF, beta = INF;
   int d, s = 0;
+  Move last_best = 0;
+  int last_score = 0;
+  int pv_stable = 0;
   for (d = 1; d <= depth; d++) {
     Move pv_move = 0;
     int window_alpha = alpha, window_beta = beta;
@@ -420,7 +455,7 @@ Move search(Board *b, int depth, int *score) {
     }
     for (;;) {
       pv_move = 0;
-      s = search_inner(b, d, window_alpha, window_beta, &pv_move);
+      s = search_inner(b, d, window_alpha, window_beta, &pv_move, 0);
       if (search_abort) break;
       if (pv_move) best = pv_move;
       if (score) *score = s;
@@ -434,6 +469,19 @@ Move search(Board *b, int depth, int *score) {
     }
     if (search_abort) break;
     search_last_depth = d;
+    if (best && pv_move == last_best && abs(s - last_score) < 15) {
+      pv_stable++;
+    } else {
+      pv_stable = 0;
+      last_best = pv_move;
+      last_score = s;
+    }
+    if (search_time_ms > 0) {
+      long long elapsed_ms = (long long)(clock() - search_start_time) * 1000 / CLOCKS_PER_SEC;
+      if (pv_stable >= 2 && elapsed_ms > (long long)search_time_ms * 35 / 100) {
+        break;
+      }
+    }
     if (d >= 3 && alpha > -MATE + PARAM_MATE_WINDOW_MARGIN && beta < MATE - PARAM_MATE_WINDOW_MARGIN) {
       if (s > alpha) alpha = s - PARAM_ASPIRATION_GROW;
       if (s < beta) beta = s + PARAM_ASPIRATION_GROW;

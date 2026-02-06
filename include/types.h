@@ -47,6 +47,8 @@ typedef struct {
   int flag;
   int score;
   Move best;
+  uint8_t gen;
+  uint8_t pad[3];
 } HashEntry;
 
 #define SQ(f,r) ((r)*8+(f))
