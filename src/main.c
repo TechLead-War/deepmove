@@ -14,6 +14,7 @@
 #include <limits.h>
 #include <signal.h>
 #include <unistd.h>
+#include <time.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -31,6 +32,66 @@ static void save_tt_on_exit(void) {
 static void handle_signal(int sig) {
   save_tt_on_exit();
   _exit(128 + sig);
+}
+
+static int selfplay_time_ms(void) {
+  const char *env = getenv("SELFPLAY_MOVE_MS");
+  if (env && *env) {
+    int v = atoi(env);
+    if (v > 0) return v;
+  }
+  return 1000; /* default 1s per move for fast TT filling */
+}
+
+static int selfplay_depth(void) {
+  const char *env = getenv("SELFPLAY_DEPTH");
+  if (env && *env) {
+    int v = atoi(env);
+    if (v > 0 && v < MAX_DEPTH - 1) return v;
+  }
+  return PARAM_DEFAULT_SEARCH_DEPTH;
+}
+
+static void selfplay_mode(void) {
+  Board b;
+  board_reset(&b);
+  long long ply = 0;
+  int games = 0;
+  int depth_limit = selfplay_depth();
+  int move_ms = selfplay_time_ms();
+  fprintf(stderr, "Self-play started (depth<=%d, move_ms=%d). Press Ctrl-C to stop.\n", depth_limit, move_ms);
+  while (1) {
+    board_sync(&b);
+    MoveList ml;
+    gen_moves(&b, &ml);
+    if (ml.n == 0 || b.fifty >= 100 || board_is_repetition(&b)) {
+      games++;
+      board_reset(&b);
+      continue;
+    }
+    int score = 0;
+    char buf[16];
+    snprintf(buf, sizeof buf, "%d", move_ms);
+    setenv("MOVE_TIME_MS", buf, 1);
+    Move best = search(&b, depth_limit, &score);
+    Move fallback = 0;
+    for (int i = 0; i < ml.n; i++) {
+      if (move_is_legal(&b, ml.m[i])) { fallback = ml.m[i]; break; }
+    }
+    if (!best || !move_is_legal(&b, best)) best = fallback;
+    if (!best) {
+      games++;
+      board_reset(&b);
+      continue;
+    }
+    make_move(&b, best);
+    ply++;
+    if (ply % 200 == 0) {
+      fprintf(stderr, "self-play games=%d ply=%lld depth=%d nodes=%lld\n",
+              games, ply, search_last_completed_depth(), search_last_nodes());
+      if (tt_save_enabled && tt_cache_path[0]) tt_save(tt_cache_path);
+    }
+  }
 }
 
 static void init_tt_cache(void) {
@@ -258,6 +319,11 @@ int main(int argc, char **argv) {
         record_move(m, us ^ 1);
       }
     }
+    return 0;
+  }
+
+  if (argc > 1 && str_eq_ignore_case(argv[1], "selfplay")) {
+    selfplay_mode();
     return 0;
   }
 

@@ -17,6 +17,7 @@ Moves are in UCI format: `e2e4`, `g1f3`, `e7e8q` (promotion). Type `quit` or pre
 - `takeback` or `undoopp` — undo the opponent move you just entered (rewinds two plies: opponent move + engine reply).  
 - `force <uci>` or `play <uci>` — replace the last engine move with your custom move.  
 - Castling is a normal UCI move: `e1g1`, `e1c1`, `e8g8`, `e8c8`.  
+- Self-play cache builder (headless): `./engine selfplay` (optional `SELFPLAY_MOVE_MS`, `SELFPLAY_DEPTH`).  
 
 **FEN** is a single line that encodes a board (where the pieces are, who is to move, castling rights, en passant). Use it when you want the engine to think from a specific position instead of the start. Paste the line in quotes after the program name.
 
