@@ -443,9 +443,22 @@ Move search(Board *b, int depth, int *score) {
   Move last_best = 0;
   int last_score = 0;
   int pv_stable = 0;
+
+  HashEntry *root_he = &tt[b->key & HASH_MASK];
+  if (PARAM_TT_INSTANT_HIT && root_he->key == b->key && root_he->depth >= PARAM_TT_HIT_MIN_DEPTH && root_he->best) {
+    best = root_he->best;
+    if (score) *score = score_from_tt(root_he->score, b->ply);
+    search_last_depth = root_he->depth;
+    return best;
+  }
+
   for (d = 1; d <= depth; d++) {
     Move pv_move = 0;
     int window_alpha = alpha, window_beta = beta;
+    if (d >= PARAM_PV_STABLE_MIN_DEPTH && best && pv_move == last_best && abs(s - last_score) < PARAM_PV_STABLE_DELTA) {
+      search_last_depth = d;
+      break;
+    }
     if (d >= 3 && alpha > -MATE + PARAM_MATE_WINDOW_MARGIN && beta < MATE - PARAM_MATE_WINDOW_MARGIN) {
       int delta = PARAM_ASPIRATION_DELTA;
       window_alpha = s - delta;

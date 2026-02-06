@@ -40,7 +40,7 @@ static int selfplay_time_ms(void) {
     int v = atoi(env);
     if (v > 0) return v;
   }
-  return 1000; /* default 1s per move for fast TT filling */
+  return 1000; // 1sec
 }
 
 static int selfplay_depth(void) {
@@ -59,6 +59,7 @@ static void selfplay_mode(void) {
   int games = 0;
   int depth_limit = selfplay_depth();
   int move_ms = selfplay_time_ms();
+  int save_interval = 50;
   fprintf(stderr, "Self-play started (depth<=%d, move_ms=%d). Press Ctrl-C to stop.\n", depth_limit, move_ms);
   while (1) {
     board_sync(&b);
@@ -86,7 +87,7 @@ static void selfplay_mode(void) {
     }
     make_move(&b, best);
     ply++;
-    if (ply % 200 == 0) {
+    if (ply % save_interval == 0) {
       fprintf(stderr, "self-play games=%d ply=%lld depth=%d nodes=%lld\n",
               games, ply, search_last_completed_depth(), search_last_nodes());
       if (tt_save_enabled && tt_cache_path[0]) tt_save(tt_cache_path);
