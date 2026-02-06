@@ -265,8 +265,8 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   search_nodes++;
   search_check_time();
   if (search_abort) return eval(b);
-  if (b->fifty >= PARAM_FIFTY_MOVE_LIMIT) return 0;
-  if (board_is_repetition(b)) return 0;
+  if (b->fifty >= PARAM_FIFTY_MOVE_LIMIT) return (b->side == W ? PARAM_CONTEMPT : -PARAM_CONTEMPT);
+  if (board_is_repetition(b)) return (b->side == W ? PARAM_CONTEMPT : -PARAM_CONTEMPT);
   int alpha_orig = alpha;
   int in_check = in_check_now(b);
   if (in_check && depth < MAX_DEPTH - 1) depth++;
@@ -292,7 +292,7 @@ static int search_inner(Board *b, int depth, int alpha, int beta, Move *pv_best)
   gen_moves(b, &ml);
   if (ml.n == 0) {
     if (in_check) return -MATE + b->ply;
-    return 0;
+    return (b->side == W ? PARAM_CONTEMPT : -PARAM_CONTEMPT);
   }
   if (should_try_null(b, depth, in_check)) {
     NullState ns;

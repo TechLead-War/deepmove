@@ -149,6 +149,23 @@ static int eval_mobility(const Board *b) {
   return score;
 }
 
+static int eval_center_control(const Board *b) {
+  static const U64 center_mask =
+      (1ULL << SQ(3, 3)) | (1ULL << SQ(4, 3)) | (1ULL << SQ(3, 4)) | (1ULL << SQ(4, 4));
+  static const U64 extended_mask =
+      (1ULL << SQ(2, 2)) | (1ULL << SQ(3, 2)) | (1ULL << SQ(4, 2)) | (1ULL << SQ(5, 2)) |
+      (1ULL << SQ(2, 3)) | (1ULL << SQ(5, 3)) |
+      (1ULL << SQ(2, 4)) | (1ULL << SQ(5, 4)) |
+      (1ULL << SQ(2, 5)) | (1ULL << SQ(3, 5)) | (1ULL << SQ(4, 5)) | (1ULL << SQ(5, 5)) |
+      (1ULL << SQ(2, 6)) | (1ULL << SQ(3, 6)) | (1ULL << SQ(4, 6)) | (1ULL << SQ(5, 6));
+  int cw = popcount(b->occ[W] & center_mask);
+  int cb = popcount(b->occ[B] & center_mask);
+  int ew = popcount(b->occ[W] & extended_mask);
+  int eb = popcount(b->occ[B] & extended_mask);
+  int score = (cw - cb) * PARAM_CENTER_OCC_BONUS + (ew - eb) * PARAM_CENTER_EXT_BONUS;
+  return score;
+}
+
 static int eval_phase(const Board *b) {
   int phase = 0;
   phase += popcount(b->p[W][N] | b->p[B][N]) * PARAM_PHASE_KNIGHT;
@@ -204,14 +221,15 @@ int eval(const Board *b) {
   int hanging = eval_hanging_pieces(b, W) + eval_hanging_pieces(b, B);
   int king_attack = eval_king_attack(b);
   int mobility = eval_mobility(b);
+  int center = eval_center_control(b);
   int tempo = eval_tempo(b);
 
   int phase = eval_phase(b);
   int mg_w = phase;
   int eg_w = PARAM_PHASE_MAX - phase;
 
-  int mg = king_safe * PARAM_KING_SAFETY_WEIGHT + king_attack + mobility * PARAM_MOBILITY_WEIGHT + tempo;
-  int eg = pawn * PARAM_PAWN_STRUCTURE_WEIGHT + rook_act + bishop_pair + hanging + tempo;
+  int mg = king_safe * PARAM_KING_SAFETY_WEIGHT + king_attack + mobility * PARAM_MOBILITY_WEIGHT + tempo + center;
+  int eg = pawn * PARAM_PAWN_STRUCTURE_WEIGHT + rook_act + bishop_pair + hanging + tempo + center / 2;
 
   int score = base + (mg * mg_w + eg * eg_w) / PARAM_PHASE_MAX;
   if (b->side == B) score = -score;
